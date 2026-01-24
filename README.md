@@ -91,5 +91,3 @@ When you are done, final report will be shown.
     ```bash
     uv run streamlit run app.py
     ```
-
-# Day-48-Template
