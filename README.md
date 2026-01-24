@@ -25,69 +25,69 @@ When you are done, final report will be shown.
 
 ### virutalenv
 
-    ```bash
+```bash
     pip install virtualenv
     python -m virtualenv .ven
-    ```
+```
 ### uv 
 
-    ```bash
+```bash
     uv sync
-    ```
+```
 
 3. Activate the environment
 
-    if using Linux
+if using Linux
 
-    ```bash
+```bash
     source .venv/bin/activate
-    ```
+```
 
-    if using Windows
+if using Windows
 
-    ```powershell
+```powershell
     .\.venv\Scripts\activate
-    ```
+```
 
 4. Install required libraries
 
 ### virutalenv
 
-    ```bash
+```bash
     pip install -r requirements.txt
-    ```
+```
 ### uv 
 
-    ```bash
+```bash
     uv sync
-    ```
+```
 
 ## Run Application
 
 1. Activate the environment
 
-    if using Linux
+if using Linux
 
-    ```bash
+```bash
     source .venv/bin/activate
-    ```
+```
 
-    if using Windows
+if using Windows
 
-    ```powrshell
+```powrshell
     .\.venv\Scripts\activate
-    ```
+```
 
 2. Start the app
 
 ### virutalenv
 
-    ```bash
+```bash
     streamlit run app.py
-    ```
+```
 
 ### uv
 
-    ```bash
+```bash
     uv run streamlit run app.py
-    ```
+```
