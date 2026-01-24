@@ -23,13 +23,13 @@ When you are done, final report will be shown.
 1. Make sure Python is installed (any recent version should be fine, I tested with Python 3.12)
 2. Create environment for this application
 
-### virutalenv
+virtualenv 
 
 ```bash
     pip install virtualenv
     python -m virtualenv .ven
 ```
-### uv 
+uv 
 
 ```bash
     uv sync
@@ -51,12 +51,12 @@ if using Windows
 
 4. Install required libraries
 
-### virutalenv
+virtualenv
 
 ```bash
     pip install -r requirements.txt
 ```
-### uv 
+uv 
 
 ```bash
     uv sync
@@ -80,13 +80,13 @@ if using Windows
 
 2. Start the app
 
-### virutalenv
+virutalenv
 
 ```bash
     streamlit run app.py
 ```
 
-### uv
+uv
 
 ```bash
     uv run streamlit run app.py
