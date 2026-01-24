@@ -6,15 +6,17 @@ from modules.utils import SettingsError
 
 from .base import AIModel
 from .gemini import GeminiModel
+from .donut import DonutModel
 
 class ModelNames(Enum):
     """Available model names."""
-
     GEMINI = "Gemini"
+    DONUT = "Donut"
 
 
 MODELS_LOADER: dict[ModelNames, Type[AIModel]] = {
     ModelNames.GEMINI: GeminiModel,
+    ModelNames.DONUT: DonutModel
 }
 
 
