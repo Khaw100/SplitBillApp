@@ -1,11 +1,19 @@
 from dataclasses import dataclass
-from typing import Self
-
+# from typing import Self
 import pandas as pd
 
 from modules.utils import format_number_to_currency
 
 from .assignment_data import AssignedItemData, ParticipantData, SplitManager
+
+
+
+from typing import TypeVar
+
+T_PurchasedItem = TypeVar("T_PurchasedItem", bound="PurchasedItemReportData")
+T_Participant = TypeVar("T_Participant", bound="ParticipantReportData")
+T_Report = TypeVar("T_Report", bound="ReportData")
+
 
 
 @dataclass
@@ -18,7 +26,7 @@ class PurchasedItemReportData:
     unit_price: float
 
     @classmethod
-    def from_item_assignment_data(cls, item_assignment: AssignedItemData) -> Self:
+    def from_item_assignment_data(cls, item_assignment: AssignedItemData) -> T_PurchasedItem:
         """Create report for an item.
 
         Args:
@@ -70,7 +78,7 @@ class ParticipantReportData:
         assigned_items: list[AssignedItemData],
         receipt_subtotal: float,
         receipt_total: float,
-    ) -> Self:
+    ) -> T_Participant:
         """Generate participant report from assignment data.
 
         Args:
@@ -124,7 +132,7 @@ class ReportData:
     participants_reports: list[ParticipantReportData]
 
     @classmethod
-    def from_split_manager(cls, manager: SplitManager) -> Self:
+    def from_split_manager(cls, manager: SplitManager) -> T_Report:
         """Create report from split assignment manager.
 
         Args:

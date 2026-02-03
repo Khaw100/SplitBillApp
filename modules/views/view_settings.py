@@ -15,18 +15,28 @@ class SettingsData:
 
     currency: str = field(default_factory=session_data.currency.get)
     model_name: ModelNames = field(default_factory=session_data.model_name.get)
+
     gemini_api_key: str | None = field(
         default_factory=lambda: os.environ.get("GOOGLE_API_KEY")
+    )
+    openai_api_key: str | None = field(
+        default_factory=lambda: os.environ.get("OPENAI_API_KEY")
     )
 
     def apply(self) -> None:
         """Apply the settings stored in this object."""
         session_data.currency.set(self.currency)
+
         if self.model_name != session_data.model_name.get():
             session_data.model.reset()
+
         session_data.model_name.set(self.model_name)
-        if self.gemini_api_key is not None and self.gemini_api_key != "":
+
+        if self.gemini_api_key:
             os.environ["GOOGLE_API_KEY"] = self.gemini_api_key
+
+        if self.openai_api_key:
+            os.environ["OPENAI_API_KEY"] = self.openai_api_key
 
 
 def currency_settings_view(settings: SettingsData) -> SettingsData:
@@ -78,6 +88,18 @@ def model_selection_view(settings: SettingsData) -> SettingsData:
             "Google API Key", type="password", value=settings.gemini_api_key
         )
         settings.gemini_api_key = google_key
+    
+    elif selected_model == ModelNames.OPENAI_GPT_VISION:
+        settings.openai_api_key = st.text_input(
+            "OpenAI API Key",
+            type="password",
+            value=settings.openai_api_key,
+        )
+
+    # DONUT (no API key needed)
+    elif selected_model == ModelNames.DONUT:
+        st.info("DONUT model runs locally. No API key required.")
+        
     settings.model_name = selected_model
     return settings
 

@@ -1,7 +1,7 @@
 from enum import Enum
 from typing import Type
 
-from modules.data import session_data
+from modules.models.gpt import GPTVisionModel
 from modules.utils import SettingsError
 
 from .base import AIModel
@@ -12,11 +12,13 @@ class ModelNames(Enum):
     """Available model names."""
     GEMINI = "Gemini"
     DONUT = "Donut"
+    OPENAI_GPT_VISION = "OpenAI GPT Vision"
 
 
 MODELS_LOADER: dict[ModelNames, Type[AIModel]] = {
     ModelNames.GEMINI: GeminiModel,
-    ModelNames.DONUT: DonutModel
+    ModelNames.DONUT: DonutModel,
+    ModelNames.OPENAI_GPT_VISION: GPTVisionModel
 }
 
 
@@ -30,6 +32,7 @@ def _load_model() -> AIModel:
     Returns:
         AIModel: loaded AI model.
     """
+    from modules.data import session_data
     model_name = session_data.model_name.get()
     if model_name not in MODELS_LOADER:
         raise SettingsError(f"Model name is not recognized {model_name}")
@@ -42,6 +45,7 @@ def get_model() -> AIModel:
     Returns:
         AIModel: the loaded AI model
     """
+    from modules.data import session_data
     model = session_data.model.get()
     if model is None:
         model = _load_model()
