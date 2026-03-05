@@ -40,7 +40,7 @@ class SettingsData:
 
 
 def currency_settings_view(settings: SettingsData) -> SettingsData:
-    """Eelement for currency settings input.
+    """Element for currency settings input.
 
     Args:
         settings (SettingsData): the current settings data
@@ -63,7 +63,7 @@ def currency_settings_view(settings: SettingsData) -> SettingsData:
 
 
 def model_selection_view(settings: SettingsData) -> SettingsData:
-    """Eelement for model selection settings input.
+    """Element for model selection settings input.
 
     Args:
         settings (SettingsData): the current settings data
@@ -78,17 +78,19 @@ def model_selection_view(settings: SettingsData) -> SettingsData:
         else 0
     )
     selected_model = st.selectbox(
-        "AIModel",
+        "AI Model",
         list(models_options),
         format_func=lambda x: x.value,
         index=current_idx,
     )
+
+    # --- Models that need API keys ---
     if selected_model == ModelNames.GEMINI:
         google_key = st.text_input(
             "Google API Key", type="password", value=settings.gemini_api_key
         )
         settings.gemini_api_key = google_key
-    
+
     elif selected_model == ModelNames.OPENAI_GPT_VISION:
         settings.openai_api_key = st.text_input(
             "OpenAI API Key",
@@ -96,10 +98,31 @@ def model_selection_view(settings: SettingsData) -> SettingsData:
             value=settings.openai_api_key,
         )
 
-    # DONUT (no API key needed)
+    # --- Free local models (no API key needed) ---
     elif selected_model == ModelNames.DONUT:
-        st.info("DONUT model runs locally. No API key required.")
-        
+        st.info(
+            "🍩 **Donut** runs locally — no API key required.\n\n"
+            "Model: `naver-clova-ix/donut-base-finetuned-cord-v2`\n\n"
+            "Best for printed receipts in English. "
+            "First run will download ~1GB model weights."
+        )
+
+    elif selected_model == ModelNames.TROCR:
+        st.info(
+            "🔤 **TrOCR (Microsoft)** runs locally — no API key required.\n\n"
+            "Model: `microsoft/trocr-large-printed`\n\n"
+            "Extracts text line-by-line from printed receipts. "
+            "First run will download model weights (~1.3GB)."
+        )
+
+    elif selected_model == ModelNames.EASYOCR:
+        st.info(
+            "🌏 **EasyOCR** runs locally — no API key required.\n\n"
+            "Supports **Indonesian + English** receipts (80+ languages available).\n\n"
+            "Good for Indonesian restaurant/cafe receipts. "
+            "First run will download model weights (~100MB)."
+        )
+
     settings.model_name = selected_model
     return settings
 

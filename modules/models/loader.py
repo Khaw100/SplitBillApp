@@ -7,18 +7,25 @@ from modules.utils import SettingsError
 from .base import AIModel
 from .gemini import GeminiModel
 from .donut import DonutModel
+from .trocr import TrOCRModel
+from .easyocr import EasyOCRModel
+
 
 class ModelNames(Enum):
     """Available model names."""
     GEMINI = "Gemini"
     DONUT = "Donut"
     OPENAI_GPT_VISION = "OpenAI GPT Vision"
+    TROCR = "TrOCR (Microsoft)"
+    EASYOCR = "EasyOCR (Free, ID+EN)"
 
 
 MODELS_LOADER: dict[ModelNames, Type[AIModel]] = {
     ModelNames.GEMINI: GeminiModel,
     ModelNames.DONUT: DonutModel,
-    ModelNames.OPENAI_GPT_VISION: GPTVisionModel
+    ModelNames.OPENAI_GPT_VISION: GPTVisionModel,
+    ModelNames.TROCR: TrOCRModel,
+    ModelNames.EASYOCR: EasyOCRModel,
 }
 
 
