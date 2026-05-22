@@ -1,9 +1,3 @@
-# Split Bill Application
-
-This repository contains AI-based application for splitting-bill, written on python (streamlit) and can be run on your local computer. 
-
-Courtesy of: https://github.com/MukhlasAdib
-
 ## Features
 
 With this application, you can upload a photo of your receipt. The AI will read the receipt and show you the data.
