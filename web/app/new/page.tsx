@@ -43,11 +43,11 @@ export default function NewBill() {
       }, 50);
     } catch (err: any) {
       if (err.name === "NotAllowedError") {
-        setError("Izin kamera ditolak — allow camera access di browser kamu.");
+        setError("Camera permission denied. Please allow camera access in your browser.");
       } else if (location.protocol !== "https:" && location.hostname !== "localhost") {
-        setError("Kamera butuh HTTPS. Buka via https://splitbill.rakhawiratama.com");
+        setError("Camera requires HTTPS. Open https://splitbill.rakhawiratama.com");
       } else {
-        setError("Kamera nggak tersedia: " + (err.message || err.name));
+        setError("Camera unavailable: " + (err.message || err.name));
       }
     }
   };

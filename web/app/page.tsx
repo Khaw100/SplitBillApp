@@ -8,10 +8,8 @@ import { api, fmtRp } from "@/lib/api";
 export default function Dashboard() {
   const router = useRouter();
   const [bills, setBills] = useState<any[]>([]);
-  const [username, setUsername] = useState("");
 
   useEffect(() => {
-    api("/me").then((d) => setUsername(d.username)).catch(() => {});
     api("/bills").then(setBills).catch(() => {});
   }, []);
 
@@ -25,7 +23,7 @@ export default function Dashboard() {
       <header className="flex items-center justify-between mb-8">
         <div>
           <h1 className="text-xl font-bold text-zinc-100">SplitBillApp</h1>
-          <p className="text-xs text-zinc-500 mt-0.5">hi, {username || "..."}</p>
+          <p className="text-xs text-zinc-500 mt-0.5">Split receipts with friends</p>
         </div>
         <button
           onClick={logout}
