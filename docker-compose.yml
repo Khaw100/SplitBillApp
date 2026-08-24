@@ -1,0 +1,40 @@
+services:
+  api:
+    build: ./api
+    container_name: splitbill-api
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:8300:8300"
+    volumes:
+      - ./data:/data
+      - ./.env:/app/.env:ro
+    env_file:
+      - .env
+    environment:
+      - SB_DB=/data/app.db
+      # Reach the Hub api container directly on the shared docker network
+      - HUB_API_BASE=http://central-dashboard-api-1:8000/api/v1
+    networks:
+      - default
+      - hub
+
+  web:
+    build:
+      context: ./web
+      args:
+        # Baked at BUILD time (Next.js rewrites limitation)
+        - API_INTERNAL_URL=http://api:8300
+    container_name: splitbill-web
+    restart: unless-stopped
+    depends_on:
+      - api
+    ports:
+      - "127.0.0.1:3200:3200"
+    environment:
+      - PORT=3200
+      - HOSTNAME=0.0.0.0
+
+networks:
+  hub:
+    external: true
+    name: central-dashboard_default
