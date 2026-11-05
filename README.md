@@ -1,5 +1,5 @@
 # SplitBill v2 — receipt splitter (full LLM, Hub-managed keys)
-
+![SplitBillApp companion](https://terrarium.rakhawiratama.com/api/creature.svg?user=Khaw100&repo=SplitBillApp)
 Upload a receipt photo → vision LLM reads it → assign friends to items → get
 per-person totals with tax/service split proportionally → export or share.
 
