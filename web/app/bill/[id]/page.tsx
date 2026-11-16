@@ -16,13 +16,24 @@ export default function BillReport() {
   const [loadError, setLoadError] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<any[]>([]);
-  const [status, setStatus] = useState<Record<string, { chosen: boolean; total: number; paid: any }>>({});
+  const [status, setStatus] = useState<
+    Record<string, { chosen: boolean; total: number; paid: any; payment: any }>
+  >({});
   const [unclaimed, setUnclaimed] = useState(0);
   const [links, setLinks] = useState<Record<string, string>>({});
   const [copied, setCopied] = useState<string | null>(null);
   const [shareUrl, setShareUrl] = useState<string | null>(null);
   const [busyShare, setBusyShare] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
+  const [reviewing, setReviewing] = useState<string | null>(null);
+
+  const loadStatus = async () => {
+    const s: any = await api(`/bills/${id}/status`);
+    const map: Record<string, any> = {};
+    for (const p of s.participants || []) map[p.name] = p;
+    setStatus(map);
+    setUnclaimed(s.unclaimed || 0);
+  };
 
   useEffect(() => {
     if (!id) return;
@@ -35,14 +46,7 @@ export default function BillReport() {
             setUnclaimed(r.unclaimed || 0);
           })
           .catch(() => {});
-        api(`/bills/${id}/status`)
-          .then((s: any) => {
-            const map: Record<string, any> = {};
-            for (const p of s.participants || []) map[p.name] = p;
-            setStatus(map);
-            setUnclaimed(s.unclaimed || 0);
-          })
-          .catch(() => {});
+        loadStatus().catch(() => {});
         // pay links are idempotent server-side
         const entries = await Promise.all(
           (b.participants as string[]).map(async (p) => {
@@ -57,7 +61,24 @@ export default function BillReport() {
         setLinks(Object.fromEntries(entries.filter(([, u]) => u)));
       })
       .catch((e) => setLoadError(e.message || "Couldn't load this bill"));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id]);
+
+  const review = async (name: string, action: "approve" | "reject") => {
+    setReviewing(name);
+    setError(null);
+    try {
+      await api(`/bills/${id}/review/${encodeURIComponent(name)}`, {
+        method: "POST",
+        body: JSON.stringify({ action }),
+      });
+      await loadStatus();
+    } catch (e: any) {
+      setError(e.message || "Couldn't update the payment");
+    } finally {
+      setReviewing(null);
+    }
+  };
 
   if (loadError)
     return (
@@ -304,6 +325,9 @@ export default function BillReport() {
               const row = rowByName[name];
               const chosen = st?.chosen ?? !!row;
               const paid = st?.paid;
+              const payment = st?.payment;
+              const pending = payment?.status === "pending";
+              const rejected = payment?.status === "rejected";
               return (
                 <li key={name} className="card overflow-hidden">
                   <div className="flex items-center gap-3 px-4 py-3">
@@ -313,6 +337,10 @@ export default function BillReport() {
                         <span className="truncate">{name}</span>
                         {paid ? (
                           <span className="tag tag-ok">paid</span>
+                        ) : pending ? (
+                          <span className="tag tag-warn">needs approval</span>
+                        ) : rejected ? (
+                          <span className="tag tag-danger">rejected</span>
                         ) : chosen ? (
                           <span className="tag tag-accent">picked</span>
                         ) : (
@@ -331,6 +359,49 @@ export default function BillReport() {
                       {row ? fmtRp(row.total) : "—"}
                     </p>
                   </div>
+
+                  {(pending || rejected) && payment && (
+                    <div className="border-t border-[var(--line)] px-4 py-3">
+                      <p className="text-[12px] text-zinc-300">
+                        {rejected ? "Claimed" : "Says they paid"} {fmtRp(payment.total ?? 0)}
+                        {payment.method ? ` via ${payment.method}` : ""}
+                      </p>
+                      {payment.note && (
+                        <p className="mt-1 text-[11px] italic text-zinc-500">&ldquo;{payment.note}&rdquo;</p>
+                      )}
+                      {payment.proof_url && (
+                        <a
+                          href={payment.proof_url}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="mt-2 inline-block"
+                          title="Open transfer proof"
+                        >
+                          {/* eslint-disable-next-line @next/next/no-img-element */}
+                          <img src={payment.proof_url} alt="transfer proof" className="proof-thumb" />
+                        </a>
+                      )}
+                      {!payment.has_proof && (
+                        <p className="mt-2 text-[11px] text-zinc-600">No transfer proof attached.</p>
+                      )}
+                      <div className="mt-2.5 flex gap-2">
+                        <button
+                          onClick={() => review(name, "approve")}
+                          disabled={reviewing === name}
+                          className="btn btn-ok btn-sm flex-1"
+                        >
+                          <Check size={14} /> {rejected ? "Approve anyway" : "Approve"}
+                        </button>
+                        <button
+                          onClick={() => review(name, "reject")}
+                          disabled={reviewing === name}
+                          className="btn btn-ghost btn-sm"
+                        >
+                          Reject
+                        </button>
+                      </div>
+                    </div>
+                  )}
 
                   <div className="flex items-center gap-2 border-t border-[var(--line)] px-3 py-2">
                     <button onClick={() => copyOrFail(msgFor(name), `pay-${name}`)} className="btn btn-secondary btn-sm flex-1">

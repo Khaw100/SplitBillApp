@@ -1,10 +1,12 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useParams } from "next/navigation";
 import { fmtRp } from "@/lib/api";
 import { copyText } from "@/lib/share";
-import { Check, Logo, Spinner, Wallet } from "@/lib/ui";
+import { Check, Close, Logo, Spinner, Upload, Wallet } from "@/lib/ui";
+
+type PayStatus = "pending" | "approved" | "rejected";
 
 export default function PayPage() {
   const { token } = useParams<{ token: string }>();
@@ -19,9 +21,12 @@ export default function PayPage() {
   const [copied, setCopied] = useState<string | null>(null);
   const [saved, setSaved] = useState(false);
   const [saving, setSaving] = useState(false);
-  const [confirming, setConfirming] = useState(false);
-  const [done, setDone] = useState(false);
-  const [doneTotal, setDoneTotal] = useState(0);
+  const [sheet, setSheet] = useState(false);
+  const [method, setMethod] = useState("");
+  const [note, setNote] = useState("");
+  const [proof, setProof] = useState<File | null>(null);
+  const [proofUrl, setProofUrl] = useState<string | null>(null);
+  const [submitting, setSubmitting] = useState(false);
   const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
@@ -36,6 +41,7 @@ export default function PayPage() {
         const q: Record<string, number> = {};
         for (const it of d.items) q[it.id] = it.my_qty || 0;
         setQty(q);
+        if (d.payment?.method) setMethod(d.payment.method);
       })
       .catch((e) => setError(e.message));
   }, [token]);
@@ -57,7 +63,7 @@ export default function PayPage() {
   // Persist the checklist shortly after they stop tapping, so the host sees
   // progress live without the friend having to press "save".
   useEffect(() => {
-    if (!data || !dirty || done || data.paid) return;
+    if (!data || !dirty) return;
     if (saveTimer.current) clearTimeout(saveTimer.current);
     saveTimer.current = setTimeout(async () => {
       try {
@@ -69,7 +75,7 @@ export default function PayPage() {
         });
         if (res.ok) setSaved(true);
       } catch {
-        /* offline: the confirm button saves too */
+        /* offline: submitting the payment saves too */
       } finally {
         setSaving(false);
       }
@@ -77,7 +83,17 @@ export default function PayPage() {
     return () => {
       if (saveTimer.current) clearTimeout(saveTimer.current);
     };
-  }, [qty, data, dirty, token, done, picked]);
+  }, [qty, data, dirty, token, picked]);
+
+  const host = data?.host;
+  const ratio = data?.fee_ratio ?? 1;
+  const payment: { status: PayStatus; method?: string; total?: number; note?: string; has_proof?: boolean } | null =
+    data?.payment ?? null;
+
+  const methods = useMemo(() => {
+    const labels = (host?.accounts || []).map((a: any) => a.label).filter(Boolean);
+    return [...labels, "Tunai"];
+  }, [host]);
 
   if (error)
     return (
@@ -94,24 +110,20 @@ export default function PayPage() {
       </main>
     );
 
-  const host = data.host;
-  const ratio = data.fee_ratio ?? 1;
-
-  if (done || data.paid)
+  if (payment?.status === "approved")
     return (
       <main className="flex min-h-[100dvh] flex-col items-center justify-center px-6 text-center">
         <div className="mb-5 flex h-14 w-14 items-center justify-center rounded-full border border-emerald-800 bg-emerald-950/60 text-emerald-400">
           <Check size={26} />
         </div>
-        <h1 className="text-lg font-semibold">Payment recorded</h1>
+        <h1 className="text-lg font-semibold">Payment confirmed</h1>
         <p className="mt-1 text-sm text-zinc-400">
           {data.participant} ·{" "}
-          <span className="num font-semibold text-emerald-400">{fmtRp(done ? doneTotal : data.paid?.total ?? 0)}</span>
+          <span className="num font-semibold text-emerald-400">{fmtRp(payment.total ?? 0)}</span>
         </p>
-        <p className="mt-3 max-w-[20rem] text-[11px] leading-relaxed text-zinc-600">
-          {host?.is_owner
-            ? `Thanks! ${host.name} will check the transfer.`
-            : `Thanks! ${host?.name || "The host"} will confirm it themselves.`}
+        <p className="mt-3 max-w-[20rem] text-[11px] leading-relaxed text-zinc-500">
+          {host?.name || "The host"} verified your payment{payment.method ? ` via ${payment.method}` : ""}. You are all
+          settled.
         </p>
       </main>
     );
@@ -129,28 +141,48 @@ export default function PayPage() {
     }
   };
 
-  const confirm = async () => {
-    setConfirming(true);
+  const pickProof = (file: File | null) => {
+    setProof(file);
+    setProofUrl((old) => {
+      if (old) URL.revokeObjectURL(old);
+      return file ? URL.createObjectURL(file) : null;
+    });
+  };
+
+  const submit = async () => {
+    setSubmitting(true);
     setActionError(null);
     try {
-      const res = await fetch(`/api/pay/${token}/confirm`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ items: picked() }),
+      const fd = new FormData();
+      fd.append("items", JSON.stringify(picked()));
+      fd.append("method", method);
+      fd.append("note", note);
+      if (proof) fd.append("proof", proof);
+      const res = await fetch(`/api/pay/${token}/submit`, { method: "POST", body: fd });
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(body.detail || "Couldn't send your confirmation.");
+      setData({
+        ...data,
+        payment: {
+          status: "pending",
+          method: body.method,
+          total: body.total,
+          has_proof: body.has_proof,
+        },
       });
-      if (!res.ok) throw new Error("Couldn't record your payment. Please try again.");
-      const d = await res.json();
-      setDoneTotal(d.total ?? Math.round(myTotal));
-      setDone(true);
+      setSheet(false);
+      pickProof(null);
     } catch (e: any) {
-      setActionError(e.message || "Couldn't record your payment. Please try again.");
+      setActionError(e.message || "Couldn't send your confirmation.");
     } finally {
-      setConfirming(false);
+      setSubmitting(false);
     }
   };
 
   const totalItems = data.items.length;
   const pickedCount = picked().length;
+  const isPending = payment?.status === "pending";
+  const isRejected = payment?.status === "rejected";
 
   const hero = (
     <section className="card p-5">
@@ -235,6 +267,26 @@ export default function PayPage() {
     </section>
   );
 
+  const statusBanner = payment && (
+    <div
+      className={`card px-4 py-3 ${
+        isPending ? "border-amber-900/60 bg-amber-950/20" : "border-red-900/60 bg-red-950/20"
+      }`}
+    >
+      <p className="flex items-center gap-2 text-[13px] font-medium text-zinc-100">
+        {isPending ? "Waiting for the host to confirm" : "The host couldn't verify this payment"}
+      </p>
+      <p className="mt-1 text-[11px] leading-relaxed text-zinc-400">
+        {fmtRp(payment.total ?? 0)}
+        {payment.method ? ` · ${payment.method}` : ""}
+        {payment.has_proof ? " · proof attached" : ""}
+        {isPending
+          ? `. ${host?.name || "The host"} will check it and approve.`
+          : ". Send it again with the right amount or a clear proof."}
+      </p>
+    </div>
+  );
+
   return (
     <main className="page page-bar page-wide">
       <header className="topbar">
@@ -249,6 +301,7 @@ export default function PayPage() {
         {/* On mobile the hero + host come first; on desktop they sit in the right sidebar. */}
         <div className="mb-5 space-y-3 lg:hidden">
           {hero}
+          {statusBanner}
           {hostCard}
         </div>
 
@@ -334,6 +387,7 @@ export default function PayPage() {
         <aside className="side-sticky mt-5 lg:mt-0">
           <div className="hidden space-y-3 lg:block">
             {hero}
+            {statusBanner}
             {hostCard}
           </div>
 
@@ -349,14 +403,103 @@ export default function PayPage() {
                 <span className="text-[13px] text-zinc-400">Your total</span>
                 <span className="money-lg">{fmtRp(myTotal)}</span>
               </div>
-              <button onClick={confirm} disabled={confirming || myTotal <= 0} className="btn btn-ok btn-block">
-                {confirming ? <Spinner size={16} /> : <Check size={17} />}
-                {confirming ? "Saving…" : "I've paid"}
+              <button
+                onClick={() => setSheet(true)}
+                disabled={myTotal <= 0 || isPending}
+                className="btn btn-ok btn-block"
+              >
+                {isPending ? <Spinner size={16} /> : <Check size={17} />}
+                {isPending
+                  ? "Waiting for approval"
+                  : isRejected
+                    ? "Send confirmation again"
+                    : "I've paid, tell the host"}
               </button>
+              {isPending && (
+                <p className="mt-2 text-center text-[11px] text-zinc-500">
+                  Sent {fmtRp(payment?.total ?? 0)}
+                  {payment?.method ? ` via ${payment.method}` : ""} · host will verify
+                </p>
+              )}
             </div>
           </div>
         </aside>
       </div>
+
+      {sheet && (
+        <div className="sheet-backdrop" onClick={() => (submitting ? null : setSheet(false))}>
+          <div className="sheet" onClick={(e) => e.stopPropagation()}>
+            <div className="mb-1 flex items-start justify-between">
+              <p className="label">Confirm your payment</p>
+              <button
+                onClick={() => setSheet(false)}
+                className="text-zinc-500 hover:text-zinc-200"
+                aria-label="Close"
+              >
+                <Close size={16} />
+              </button>
+            </div>
+            <p className="money-lg">{fmtRp(myTotal)}</p>
+            <p className="mt-1 text-[11px] text-zinc-500">
+              {host?.name || "The host"} will get this and approve it.
+            </p>
+
+            <p className="label mt-4 mb-2">How did you pay?</p>
+            <div className="flex flex-wrap gap-1.5">
+              {methods.map((m) => (
+                <button
+                  key={m}
+                  onClick={() => setMethod(m)}
+                  className={`pill ${method === m ? "pill-on" : ""}`}
+                >
+                  {m}
+                </button>
+              ))}
+            </div>
+
+            <p className="label mb-2 mt-4">Transfer proof (optional)</p>
+            <div className="flex items-center gap-3">
+              <label className="btn btn-secondary btn-sm cursor-pointer">
+                <Upload size={14} />
+                {proof ? "Change" : "Upload"}
+                <input
+                  type="file"
+                  accept="image/*"
+                  className="hidden"
+                  onChange={(e) => pickProof(e.target.files?.[0] ?? null)}
+                />
+              </label>
+              {proofUrl && (
+                // eslint-disable-next-line @next/next/no-img-element
+                <img src={proofUrl} alt="proof" className="proof-thumb" />
+              )}
+              {proof && (
+                <button onClick={() => pickProof(null)} className="text-[11px] text-zinc-500 hover:text-red-400">
+                  remove
+                </button>
+              )}
+            </div>
+
+            <p className="label mb-2 mt-4">Note (optional)</p>
+            <input
+              value={note}
+              onChange={(e) => setNote(e.target.value)}
+              placeholder="e.g. transfer from my wife's account"
+              className="input !h-10 text-sm"
+            />
+
+            {actionError && <p className="mt-3 text-[12px] text-red-400">{actionError}</p>}
+
+            <button onClick={submit} disabled={submitting} className="btn btn-ok btn-block mt-4">
+              {submitting ? <Spinner size={16} /> : <Check size={16} />}
+              {submitting ? "Sending…" : `Send to ${host?.name || "host"}`}
+            </button>
+            <p className="mt-2 text-center text-[11px] text-zinc-600">
+              Nothing is marked paid until your host approves it.
+            </p>
+          </div>
+        </div>
+      )}
     </main>
   );
 }

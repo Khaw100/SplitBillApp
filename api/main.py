@@ -17,13 +17,14 @@ import uuid
 from contextlib import contextmanager
 from pathlib import Path
 
-from fastapi import Depends, FastAPI, File, HTTPException, Request, UploadFile
+from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import FileResponse, JSONResponse
 from itsdangerous import BadSignature, TimestampSigner
 
 DB_PATH = Path(os.environ.get("SB_DB", "/data/app.db"))
 DATA_DIR = DB_PATH.parent
+PROOF_DIR = DATA_DIR / "proofs"
 SECRET_KEY = os.environ.get("SECRET_KEY", "dev-insecure-change-me")
 COOKIE_NAME = "sb_session"
 HUB_BASE = os.environ.get("HUB_API_BASE", "http://127.0.0.1:8002/api/v1")
@@ -75,7 +76,12 @@ CREATE TABLE IF NOT EXISTS payments (
   participant TEXT NOT NULL,
   items_json TEXT NOT NULL,            -- [{id,qty}]
   total REAL NOT NULL,
-  paid_at TEXT NOT NULL DEFAULT (datetime('now'))
+  paid_at TEXT NOT NULL DEFAULT (datetime('now')),
+  method TEXT NOT NULL DEFAULT '',     -- BCA / GoPay / Cash ...
+  note TEXT NOT NULL DEFAULT '',
+  proof TEXT NOT NULL DEFAULT '',      -- filename in /data/proofs
+  status TEXT NOT NULL DEFAULT 'pending',  -- pending | approved | rejected
+  reviewed_at TEXT
 );
 CREATE TABLE IF NOT EXISTS claims (
   bill_id TEXT NOT NULL,
@@ -283,6 +289,16 @@ def init_db() -> None:
             db.execute("ALTER TABLE shares ADD COLUMN kind TEXT NOT NULL DEFAULT 'view'")
         if "participant" not in cols:
             db.execute("ALTER TABLE shares ADD COLUMN participant TEXT")
+        cols = {r[1] for r in db.execute("PRAGMA table_info(payments)")}
+        for name, ddl in (
+            ("method", "ALTER TABLE payments ADD COLUMN method TEXT NOT NULL DEFAULT ''"),
+            ("note", "ALTER TABLE payments ADD COLUMN note TEXT NOT NULL DEFAULT ''"),
+            ("proof", "ALTER TABLE payments ADD COLUMN proof TEXT NOT NULL DEFAULT ''"),
+            ("status", "ALTER TABLE payments ADD COLUMN status TEXT NOT NULL DEFAULT 'pending'"),
+            ("reviewed_at", "ALTER TABLE payments ADD COLUMN reviewed_at TEXT"),
+        ):
+            if name not in cols:
+                db.execute(ddl)
 
 
 init_db()
@@ -856,10 +872,15 @@ async def get_pay(token: str):
 
     with get_db() as db:
         pay = db.execute(
-            "SELECT total,paid_at FROM payments WHERE bill_id=? AND participant=? "
-            "ORDER BY paid_at DESC LIMIT 1",
+            "SELECT total,paid_at,method,note,proof,status,reviewed_at FROM payments "
+            "WHERE bill_id=? AND participant=? ORDER BY paid_at DESC LIMIT 1",
             (row["bill_id"], participant),
         ).fetchone()
+
+    payment = None
+    if pay:
+        payment = dict(pay)
+        payment["has_proof"] = bool(payment.pop("proof", ""))
 
     return {
         "title": snap["title"],
@@ -873,7 +894,8 @@ async def get_pay(token: str):
         "host": host,
         "recipient": None,
         "fee_ratio": ratio,
-        "paid": dict(pay) if pay else None,
+        "payment": payment,
+        "paid": payment,
     }
 
 
@@ -927,8 +949,85 @@ async def save_claim(token: str, request: Request):
     return {"ok": True, "items": mine, "total": _claim_total(row["bill_id"], snap, row["participant"], mine)}
 
 
+@app.post("/pay/{token}/submit")
+async def submit_payment(
+    token: str,
+    items: str = Form("[]"),
+    method: str = Form(""),
+    note: str = Form(""),
+    proof: UploadFile | None = File(None),
+):
+    """Participant announces a payment: what they had, how they paid, optional proof.
+
+    Nothing is marked paid here: the row lands as `pending` and the host approves
+    or rejects it from the bill page.
+    """
+    with get_db() as db:
+        row = db.execute(
+            "SELECT bill_id,snapshot_json,participant FROM shares WHERE id=? AND kind='pay'",
+            (token,),
+        ).fetchone()
+    if not row:
+        raise HTTPException(status_code=404, detail="Pay link not found")
+    snap = json.loads(row["snapshot_json"])
+    participant = row["participant"]
+
+    try:
+        parsed_items = json.loads(items or "[]")
+    except json.JSONDecodeError:
+        parsed_items = []
+    mine = _clean_claim(snap, parsed_items if isinstance(parsed_items, list) else [])
+
+    with get_db() as db:
+        db.execute(
+            "INSERT INTO claims (bill_id,participant,items_json,updated_at) VALUES (?,?,?,datetime('now')) "
+            "ON CONFLICT(bill_id,participant) DO UPDATE SET items_json=excluded.items_json, updated_at=datetime('now')",
+            (row["bill_id"], participant, json.dumps(mine)),
+        )
+    total = _claim_total(row["bill_id"], snap, participant, mine)
+
+    proof_name = ""
+    if proof is not None and proof.filename:
+        raw = await proof.read()
+        if len(raw) > 6 * 1024 * 1024:
+            raise HTTPException(status_code=413, detail="Proof image too large (max 6MB)")
+        if raw:
+            ext = Path(proof.filename).suffix.lower()
+            if ext not in (".jpg", ".jpeg", ".png", ".webp", ".heic"):
+                ext = ".jpg"
+            PROOF_DIR.mkdir(parents=True, exist_ok=True)
+            proof_name = f"{uuid.uuid4().hex[:16]}{ext}"
+            (PROOF_DIR / proof_name).write_bytes(raw)
+
+    payment_id = uuid.uuid4().hex[:12]
+    with get_db() as db:
+        db.execute(
+            "INSERT INTO payments (id,bill_id,participant,items_json,total,method,note,proof,status) "
+            "VALUES (?,?,?,?,?,?,?,?,'pending')",
+            (
+                payment_id,
+                row["bill_id"],
+                participant,
+                json.dumps([{"id": k, "qty": v} for k, v in mine.items()]),
+                total,
+                (method or "").strip()[:40],
+                (note or "").strip()[:400],
+                proof_name,
+            ),
+        )
+    return {
+        "ok": True,
+        "id": payment_id,
+        "total": total,
+        "status": "pending",
+        "method": (method or "").strip()[:40],
+        "has_proof": bool(proof_name),
+    }
+
+
 @app.post("/pay/{token}/confirm")
 async def confirm_pay(token: str, request: Request):
+    """Legacy JSON path: announce a payment without method/proof."""
     with get_db() as db:
         row = db.execute(
             "SELECT bill_id,snapshot_json,participant FROM shares WHERE id=? AND kind='pay'",
@@ -950,16 +1049,62 @@ async def confirm_pay(token: str, request: Request):
     total = _claim_total(row["bill_id"], snap, participant, mine)
     with get_db() as db:
         db.execute(
-            "INSERT INTO payments (id,bill_id,participant,items_json,total) VALUES (?,?,?,?,?)",
+            "INSERT INTO payments (id,bill_id,participant,items_json,total,method,note,status) "
+            "VALUES (?,?,?,?,?,?,?,'pending')",
             (
                 uuid.uuid4().hex[:12],
                 row["bill_id"],
                 participant,
                 json.dumps([{"id": k, "qty": v} for k, v in mine.items()]),
                 total,
+                (body.get("method") or "").strip()[:40],
+                (body.get("note") or "").strip()[:400],
             ),
         )
-    return {"ok": True, "total": total}
+    return {"ok": True, "total": total, "status": "pending"}
+
+
+@app.get("/proof/{stem}")
+async def get_proof(stem: str, user: str = Depends(require_user)):
+    """Serve a transfer proof by its stem (no file extension on purpose).
+
+    Cloudflare caches by file extension, so an image URL ending in .png would be
+    handed out from the edge even with no-store. An extensionless path is never
+    cached, and the file is only reachable with the host session cookie.
+    """
+    if "/" in stem or "\\" in stem or stem.startswith(".") or not stem:
+        raise HTTPException(status_code=404, detail="Not found")
+    matches = sorted(PROOF_DIR.glob(f"{stem}.*")) if PROOF_DIR.exists() else []
+    if not matches:
+        raise HTTPException(status_code=404, detail="Not found")
+    return FileResponse(
+        matches[0],
+        headers={"Cache-Control": "private, no-store, max-age=0", "Pragma": "no-cache"},
+    )
+
+
+@app.post("/bills/{bill_id}/review/{participant}")
+async def review_payment(
+    bill_id: str, participant: str, request: Request, user: str = Depends(require_user)
+):
+    """Host verifies a submitted payment: approve (lunas) or reject (ask again)."""
+    body = await request.json()
+    action = (body.get("action") or "").strip()
+    if action not in ("approve", "reject"):
+        raise HTTPException(status_code=422, detail="action must be approve or reject")
+    with get_db() as db:
+        pay = db.execute(
+            "SELECT id FROM payments WHERE bill_id=? AND participant=? ORDER BY paid_at DESC LIMIT 1",
+            (bill_id, participant),
+        ).fetchone()
+        if not pay:
+            raise HTTPException(status_code=404, detail="No payment submitted yet")
+        status = "approved" if action == "approve" else "rejected"
+        db.execute(
+            "UPDATE payments SET status=?, reviewed_at=datetime('now') WHERE id=?",
+            (status, pay["id"]),
+        )
+    return {"ok": True, "status": status}
 
 
 @app.get("/bills/{bill_id}/status")
@@ -974,9 +1119,17 @@ async def bill_status(bill_id: str, user: str = Depends(require_user)):
     totals = {p["name"]: p["total"] for p in result}
     with get_db() as db:
         pays = db.execute(
-            "SELECT participant,total,paid_at FROM payments WHERE bill_id=?", (bill_id,)
+            "SELECT participant,total,paid_at,method,note,proof,status,reviewed_at FROM payments "
+            "WHERE bill_id=? ORDER BY paid_at ASC",
+            (bill_id,),
         ).fetchall()
-    paid = {p["participant"]: dict(p) for p in pays}
+    latest: dict[str, dict] = {}
+    for p in pays:  # later rows win
+        d = dict(p)
+        proof = d.get("proof") or ""
+        d["has_proof"] = bool(proof)
+        d["proof_url"] = f"/api/proof/{proof.rsplit('.', 1)[0]}" if proof else ""
+        latest[d.pop("participant")] = d
     return {
         "unclaimed": unclaimed,
         "participants": [
@@ -984,7 +1137,8 @@ async def bill_status(bill_id: str, user: str = Depends(require_user)):
                 "name": p,
                 "chosen": p in totals,
                 "total": totals.get(p, 0),
-                "paid": paid.get(p),
+                "payment": latest.get(p),
+                "paid": latest.get(p) if latest.get(p, {}).get("status") == "approved" else None,
             }
             for p in participants
         ],

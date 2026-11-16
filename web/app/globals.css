@@ -299,6 +299,16 @@ textarea.input {
   background: var(--accent-soft);
   color: #93c5fd;
 }
+.tag-warn {
+  border-color: rgba(245, 158, 11, 0.4);
+  background: rgba(245, 158, 11, 0.14);
+  color: #fbbf24;
+}
+.tag-danger {
+  border-color: rgba(239, 68, 68, 0.4);
+  background: rgba(239, 68, 68, 0.14);
+  color: #fca5a5;
+}
 
 /* ── Avatar ─────────────────────────────────────────────────────────────── */
 .avatar {
@@ -405,6 +415,58 @@ textarea.input {
 
 .fade-up {
   animation: fadeUp 0.22s ease both;
+}
+
+/* ── Bottom sheet (payment confirmation) ────────────────────────────────── */
+.sheet-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.62);
+  backdrop-filter: blur(3px);
+  -webkit-backdrop-filter: blur(3px);
+}
+.sheet {
+  width: 100%;
+  max-width: 30rem;
+  max-height: 92dvh;
+  overflow-y: auto;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-bottom: none;
+  border-radius: 1.125rem 1.125rem 0 0;
+  padding: 1rem 1rem calc(1rem + env(safe-area-inset-bottom));
+  animation: sheetUp 0.2s ease both;
+}
+@media (min-width: 640px) {
+  .sheet-backdrop {
+    align-items: center;
+    padding: 1rem;
+  }
+  .sheet {
+    border-radius: 1.125rem;
+    border-bottom: 1px solid var(--line);
+  }
+}
+@keyframes sheetUp {
+  from {
+    transform: translateY(14px);
+    opacity: 0;
+  }
+  to {
+    transform: none;
+    opacity: 1;
+  }
+}
+.proof-thumb {
+  width: 4rem;
+  height: 4rem;
+  border-radius: 0.6rem;
+  object-fit: cover;
+  border: 1px solid var(--line-2);
 }
 @keyframes fadeUp {
   from {
