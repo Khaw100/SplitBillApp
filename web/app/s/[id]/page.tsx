@@ -2,12 +2,17 @@
 
 import { useEffect, useState } from "react";
 import { useParams } from "next/navigation";
-import { fmtRp } from "@/lib/api";
+import { fmtDate, fmtMoney } from "@/lib/api";
+import type { PersonResult } from "@/lib/split";
+import { CenterMessage, Container, Logo, PersonCard, Skeleton, SummaryPanel } from "@/components/ui";
+
+type Snapshot = { title: string; currency: string; total: number; created_at: string; result: PersonResult[] };
 
 export default function SharePage() {
   const { id } = useParams<{ id: string }>();
-  const [snap, setSnap] = useState<any | null>(null);
+  const [snap, setSnap] = useState<Snapshot | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [me, setMe] = useState<string | null>(null);
 
   useEffect(() => {
     if (!id) return;
@@ -20,88 +25,102 @@ export default function SharePage() {
       .catch((e) => setError(e.message));
   }, [id]);
 
+  const header = (
+    <header className="border-b border-zinc-900 pt-safe">
+      <Container className="h-16 flex items-center gap-3">
+        <Logo />
+        <span className="font-semibold text-zinc-100">SplitBill</span>
+        <span className="ml-auto text-[11px] font-medium text-zinc-500 bg-zinc-900 border border-zinc-800 rounded-full px-2.5 py-1">
+          Read-only
+        </span>
+      </Container>
+    </header>
+  );
+
   if (error)
     return (
-      <main className="min-h-screen flex items-center justify-center px-4">
-        <div className="text-center">
-          <p className="text-4xl mb-3">🧾</p>
-          <p className="text-sm text-zinc-400">{error}</p>
-          <p className="text-xs text-zinc-600 mt-1">This link is invalid or has expired.</p>
-        </div>
-      </main>
+      <>
+        {header}
+        <CenterMessage title="Link not available">
+          This share link is invalid or the bill was deleted.
+        </CenterMessage>
+      </>
     );
 
   if (!snap)
-    return <main className="min-h-screen flex items-center justify-center text-sm text-zinc-500">Loading…</main>;
+    return (
+      <>
+        {header}
+        <Container className="py-8 max-w-3xl space-y-4">
+          <Skeleton className="h-10 w-2/3" />
+          <Skeleton className="h-40" />
+          <Skeleton className="h-48" />
+        </Container>
+      </>
+    );
 
-  const perPerson = snap.total / Math.max(1, snap.result.length);
+  const cur = snap.currency || "Rp";
+  const visible = me ? snap.result.filter((p) => p.name === me) : snap.result;
 
   return (
-    <main className="min-h-screen max-w-xl mx-auto px-4 py-10">
-      <header className="mb-6">
-        <div className="flex items-center gap-2">
-          <h1 className="text-xl font-bold text-zinc-100">{snap.title}</h1>
-          <span className="text-[10px] uppercase tracking-widest text-zinc-600 bg-zinc-900 border border-zinc-800 rounded-full px-2 py-0.5">
-            shared
-          </span>
+    <>
+      {header}
+      <Container className="py-8 pb-16 max-w-4xl">
+        <div className="mb-6">
+          <h1 className="text-2xl sm:text-3xl font-bold text-zinc-50 break-words">{snap.title}</h1>
+          <p className="text-sm text-zinc-500 mt-1">Split result · {fmtDate(snap.created_at)}</p>
         </div>
-        <p className="text-xs text-zinc-500 mt-0.5">Split result · read-only</p>
-      </header>
 
-      <div className="grid grid-cols-3 gap-3 mb-8">
-        <Card label="People" value={String(snap.result.length)} />
-        <Card label="Grand total" value={fmtRp(snap.total)} accent />
-        <Card label="Per person" value={fmtRp(perPerson)} />
-      </div>
+        <div className="grid gap-6 md:grid-cols-[1fr_300px] md:items-start">
+          <aside className="space-y-4 md:sticky md:top-6 md:order-last">
+            <SummaryPanel total={snap.total} people={snap.result.length} currency={cur} />
+          </aside>
 
-      <div className="space-y-4">
-        {snap.result.map((p: any) => (
-          <div key={p.name} className="bg-zinc-900 border border-zinc-800 rounded-2xl p-4">
-            <div className="flex items-center justify-between mb-3 pb-3 border-b border-zinc-800">
-              <h2 className="text-sm font-semibold text-zinc-200">{p.name}</h2>
-              <p className="text-sm">
-                <span className="text-zinc-500 text-xs mr-2">TOTAL</span>
-                <span className="font-bold text-blue-400">{fmtRp(p.total)}</span>
-              </p>
+          <section className="min-w-0">
+            {snap.result.length > 1 && (
+              <div className="mb-4">
+                <p className="text-xs text-zinc-500 mb-2">Find your name</p>
+                <div className="flex gap-2 overflow-x-auto pb-1 -mx-4 px-4 sm:mx-0 sm:px-0 sm:flex-wrap">
+                  {[null, ...snap.result.map((p) => p.name)].map((n) => (
+                    <button
+                      key={n ?? "__all"}
+                      onClick={() => setMe(n)}
+                      className={`shrink-0 h-9 rounded-full px-3.5 text-sm border transition-colors ${
+                        me === n
+                          ? "bg-emerald-500/15 border-emerald-500/60 text-emerald-200"
+                          : "bg-zinc-900 border-zinc-800 text-zinc-400 hover:text-zinc-200"
+                      }`}
+                    >
+                      {n ?? "Everyone"}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            <div className="space-y-4">
+              {visible.map((p) => (
+                <PersonCard key={p.name} p={p} currency={cur} />
+              ))}
             </div>
-            <table className="w-full text-sm">
-              <tbody>
-                {p.lines.map((l: any, i: number) => (
-                  <tr key={i} className="border-b border-zinc-800/50 last:border-0">
-                    <td className="py-2 text-zinc-300">
-                      {l.name}
-                      {l.shared_by > 1 && (
-                        <span className="ml-2 text-[10px] uppercase tracking-wider text-amber-400/80">÷{l.shared_by}</span>
-                      )}
-                    </td>
-                    <td className="py-2 text-right text-zinc-500">{l.qty}×</td>
-                    <td className="py-2 text-right text-zinc-400">{fmtRp(l.line_total)}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-            <p className="text-xs text-zinc-600 mt-2">
-              subtotal {fmtRp(p.subtotal)} · others* {fmtRp(p.others)}
+            <p className="text-xs text-zinc-600 mt-4">
+              Tax, service and discounts are split proportionally to what each person ordered.
             </p>
-          </div>
-        ))}
-      </div>
-      <p className="text-xs text-zinc-700 mt-4">*tax, service, discount etc.</p>
 
-      <footer className="mt-10 text-center">
-        <a href="/" className="text-xs text-blue-400 hover:text-blue-300">
-          💵 Split your own bill →
-        </a>
-      </footer>
-    </main>
-  );
-}
+            {me && (
+              <p className="mt-6 text-center text-sm text-zinc-400">
+                You owe <span className="font-semibold text-emerald-300">{fmtMoney(visible[0]?.total || 0, cur)}</span>
+              </p>
+            )}
+          </section>
+        </div>
 
-function Card({ label, value, accent }: { label: string; value: string; accent?: boolean }) {
-  return (
-    <div className={`rounded-2xl border p-4 ${accent ? "bg-blue-950/20 border-blue-900/60" : "bg-zinc-900 border-zinc-800"}`}>
-      <p className="text-[10px] uppercase tracking-widest text-zinc-500 font-semibold mb-1">{label}</p>
-      <p className={`font-bold ${accent ? "text-blue-400" : "text-zinc-100"}`}>{value}</p>
-    </div>
+        <footer className="mt-12 text-center">
+          <a href="/" className="text-sm text-emerald-400 hover:text-emerald-300">
+            Split your own bill →
+          </a>
+        </footer>
+      </Container>
+    </>
   );
 }
