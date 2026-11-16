@@ -446,6 +446,10 @@ async def delete_bill(bill_id: str, user: str = Depends(require_user)):
         cur = db.execute("DELETE FROM bills WHERE id=?", (bill_id,))
         if cur.rowcount == 0:
             raise HTTPException(status_code=404, detail="Bill not found")
+        # Pay links and self-reported data must die with the bill.
+        db.execute("DELETE FROM shares WHERE bill_id=?", (bill_id,))
+        db.execute("DELETE FROM claims WHERE bill_id=?", (bill_id,))
+        db.execute("DELETE FROM payments WHERE bill_id=?", (bill_id,))
     return {"ok": True}
 
 
@@ -629,13 +633,11 @@ async def get_share(share_id: str):
     snap["host"] = _snapshot_host(snap)
     with get_db() as db:
         bill = db.execute("SELECT * FROM bills WHERE id=?", (row["bill_id"],)).fetchone()
-    if bill:
-        result, unclaimed = _bill_result(dict(bill))
-        snap["result"] = result
-        snap["unclaimed"] = unclaimed
-    else:
-        snap["result"] = _split_result(snap)
-        snap["unclaimed"] = 0
+    if not bill:
+        raise HTTPException(status_code=404, detail="Share not found")
+    result, unclaimed = _bill_result(dict(bill))
+    snap["result"] = result
+    snap["unclaimed"] = unclaimed
     return snap
 
 
@@ -676,7 +678,12 @@ async def get_pay(token: str):
             "SELECT bill_id,snapshot_json,participant FROM shares WHERE id=? AND kind='pay'",
             (token,),
         ).fetchone()
-    if not row:
+        alive = (
+            db.execute("SELECT id FROM bills WHERE id=?", (row["bill_id"],)).fetchone()
+            if row
+            else None
+        )
+    if not row or not alive:
         raise HTTPException(status_code=404, detail="Pay link not found")
     snap = json.loads(row["snapshot_json"])
     participant = row["participant"]
@@ -684,7 +691,6 @@ async def get_pay(token: str):
     ratio = _fee_ratio(snap)
     claims = _claims_for(row["bill_id"])
     mine = claims.get(participant, {})
-
     claimed_units: dict[str, int] = {}
     for its in claims.values():
         for iid, q in its.items():
