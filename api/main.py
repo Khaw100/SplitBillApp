@@ -6,6 +6,7 @@ config is fetched from Wipiii Hub (project-scoped). Bills + shares in SQLite.
 
 import base64
 import json
+import math
 import os
 import sqlite3
 import uuid
@@ -171,7 +172,10 @@ Return STRICT JSON only, no markdown fences:
 }
 Rules:
 - price/subtotal/total are integers in smallest displayed unit (no decimals for Rp)
+- price is the UNIT price (price per 1 qty). If the receipt only prints the line
+  total, divide it by qty.
 - qty = pack quantity if item sold per-pack
+- Do not list tax, service charge, rounding or discounts as items
 - If not a receipt at all: {"is_receipt": false}
 - Copy item names as printed (keep original language)
 """
@@ -227,11 +231,82 @@ async def parse_receipt(image: UploadFile = File(...), user: str = Depends(requi
 # ── Bills CRUD ────────────────────────────────────────────────────────────────
 
 
+# ── Split math ────────────────────────────────────────────────────────────────
+
+
+def compute_result(items: list, assignments: dict, total: float) -> list:
+    """Per-participant totals.
+
+    Shared items are divided evenly between everyone who ticked them. The
+    grand total (incl. tax/service/discount) is distributed proportionally to
+    each person's item subtotal, using the *assigned items sum* as base so the
+    per-person totals always add up exactly to the grand total (largest
+    remainder rounding).
+    """
+    items_by_id = {i["id"]: i for i in items}
+    share_count: dict[str, int] = {}
+    for ids in assignments.values():
+        for iid in set(ids):
+            share_count[iid] = share_count.get(iid, 0) + 1
+
+    people = []
+    for name, ids in assignments.items():
+        lines, sub = [], 0.0
+        for iid in dict.fromkeys(ids):  # dedupe, keep order
+            it = items_by_id.get(iid)
+            if not it:
+                continue
+            n = share_count[iid]
+            line_total = float(it.get("price") or 0) * float(it.get("qty") or 0) / n
+            sub += line_total
+            lines.append({**it, "line_total": round(line_total), "shared_by": n})
+        people.append((name, lines, sub))
+
+    assigned_sum = sum(p[2] for p in people)
+    grand = round(float(total or 0))
+    raw = [p[2] / assigned_sum * grand if assigned_sum else 0.0 for p in people]
+    totals = [math.floor(r) for r in raw]
+    leftover = grand - sum(totals)
+    order = sorted(range(len(raw)), key=lambda i: raw[i] - totals[i], reverse=True)
+    for i in order[: max(0, leftover)]:
+        totals[i] += 1
+
+    return [
+        {
+            "name": name,
+            "lines": lines,
+            "subtotal": round(sub),
+            "total": totals[idx],
+            "others": totals[idx] - round(sub),
+        }
+        for idx, (name, lines, sub) in enumerate(people)
+    ]
+
+
+def validate_bill_body(body: dict) -> None:
+    items = body.get("items")
+    participants = body.get("participants")
+    assignments = body.get("assignments")
+    if not isinstance(items, list) or not items:
+        raise HTTPException(status_code=422, detail="Bill needs at least one item")
+    if not isinstance(participants, list) or not participants:
+        raise HTTPException(status_code=422, detail="Bill needs at least one participant")
+    if not isinstance(assignments, dict):
+        raise HTTPException(status_code=422, detail="Invalid assignments")
+    try:
+        if float(body.get("total") or 0) <= 0:
+            raise HTTPException(status_code=422, detail="Total must be greater than 0")
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=422, detail="Invalid total")
+
+
 @app.get("/bills")
 async def list_bills(user: str = Depends(require_user)):
     with get_db() as db:
         rows = db.execute(
-            "SELECT id,title,currency,total,created_at FROM bills ORDER BY created_at DESC"
+            "SELECT id,title,currency,total,created_at,"
+            "json_array_length(participants_json) AS people "
+            "FROM bills ORDER BY created_at DESC"
         ).fetchall()
     return [dict(r) for r in rows]
 
@@ -239,6 +314,7 @@ async def list_bills(user: str = Depends(require_user)):
 @app.post("/bills")
 async def create_bill(request: Request, user: str = Depends(require_user)):
     body = await request.json()
+    validate_bill_body(body)
     bill_id = uuid.uuid4().hex[:12]
     with get_db() as db:
         db.execute(
@@ -267,6 +343,7 @@ async def get_bill(bill_id: str, user: str = Depends(require_user)):
     d = dict(row)
     for k in ("items_json", "assignments_json", "participants_json"):
         d[k[:-5]] = json.loads(d.pop(k))
+    d["result"] = compute_result(d["items"], d["assignments"], d["total"])
     return d
 
 
@@ -276,6 +353,8 @@ async def delete_bill(bill_id: str, user: str = Depends(require_user)):
         cur = db.execute("DELETE FROM bills WHERE id=?", (bill_id,))
         if cur.rowcount == 0:
             raise HTTPException(status_code=404, detail="Bill not found")
+        # public share links of a deleted bill should stop working too
+        db.execute("DELETE FROM shares WHERE bill_id=?", (bill_id,))
     return {"ok": True}
 
 
@@ -298,6 +377,13 @@ async def share_bill(bill_id: str, user: str = Depends(require_user)):
         "assignments": json.loads(d["assignments_json"]),
         "participants": json.loads(d["participants_json"]),
     }
+    with get_db() as db:
+        # bills are immutable → reuse an existing link instead of piling up rows
+        existing = db.execute(
+            "SELECT id FROM shares WHERE bill_id=? ORDER BY created_at DESC LIMIT 1", (bill_id,)
+        ).fetchone()
+    if existing:
+        return {"share_id": existing["id"]}
     share_id = uuid.uuid4().hex[:10]
     with get_db() as db:
         db.execute(
@@ -316,25 +402,5 @@ async def get_share(share_id: str):
     snap = json.loads(row["snapshot_json"])
     snap["created_at"] = row["created_at"]
 
-    # compute per-participant totals server-side
-    items_by_id = {i["id"]: i for i in snap["items"]}
-    result = []
-    for name, item_ids in snap["assignments"].items():
-        lines, sub = [], 0.0
-        for iid in item_ids:
-            it = items_by_id.get(iid)
-            if not it:
-                continue
-            share_count = sum(1 for ids in snap["assignments"].values() if iid in ids)
-            line_total = it["price"] * it["qty"] / max(1, share_count)
-            sub += line_total
-            lines.append({**it, "line_total": round(line_total), "shared_by": share_count})
-        ratio = sub / snap["subtotal"] if snap["subtotal"] else 0
-        total = round(ratio * snap["total"])
-        result.append({
-            "name": name, "lines": lines,
-            "subtotal": round(sub), "total": total,
-            "others": total - round(sub),
-        })
-    snap["result"] = result
+    snap["result"] = compute_result(snap["items"], snap["assignments"], snap["total"])
     return snap
