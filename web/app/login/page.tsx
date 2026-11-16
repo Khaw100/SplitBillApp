@@ -2,13 +2,12 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
-import { Alert, Icon, Logo, Spinner, btn, input, label } from "@/components/ui";
+import { Logo, Spinner } from "@/lib/ui";
 
 export default function LoginPage() {
   const router = useRouter();
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
-  const [showPw, setShowPw] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
@@ -25,113 +24,70 @@ export default function LoginPage() {
       });
       if (!res.ok) {
         const d = await res.json().catch(() => ({}));
-        throw new Error(typeof d.detail === "string" ? d.detail : "Login failed");
+        throw new Error(typeof d.detail === "string" ? d.detail : "Sign-in failed");
       }
       router.replace("/");
     } catch (err: any) {
-      setError(err.message || "Login failed");
+      setError(err.message || "Sign-in failed");
       setBusy(false);
     }
   };
 
   return (
-    <main className="min-h-dvh grid lg:grid-cols-2">
-      {/* Brand panel — desktop only */}
-      <section className="hidden lg:flex flex-col justify-between p-12 border-r border-zinc-900 bg-gradient-to-br from-emerald-500/10 via-zinc-950 to-zinc-950">
-        <div className="flex items-center gap-3">
+    <main className="flex min-h-[100dvh] flex-col justify-center px-5">
+      <div className="mx-auto w-full max-w-[22rem]">
+        <div className="mb-8 flex flex-col items-start gap-6">
           <Logo />
-          <span className="font-semibold text-zinc-100">SplitBill</span>
+          <div>
+            <h1 className="text-2xl font-semibold tracking-tight">Sign in</h1>
+            <p className="mt-1 text-sm leading-relaxed text-zinc-500">
+              This app is private, only you can create split bills.
+            </p>
+          </div>
         </div>
-        <div className="max-w-md">
-          <h2 className="text-4xl font-bold tracking-tight text-zinc-50 leading-tight">
-            Snap the receipt.
-            <br />
-            <span className="text-emerald-400">Split it fairly.</span>
-          </h2>
-          <ul className="mt-8 space-y-4 text-zinc-400">
-            {[
-              ["camera", "AI reads every line of your receipt"],
-              ["users", "Tap who ordered what — shared items split automatically"],
-              ["share", "Tax & service distributed proportionally, share in one link"],
-            ].map(([icon, text]) => (
-              <li key={text} className="flex items-center gap-3">
-                <span className="size-9 grid place-items-center rounded-xl bg-zinc-900 border border-zinc-800 text-emerald-400">
-                  <Icon name={icon} />
-                </span>
-                {text}
-              </li>
-            ))}
-          </ul>
-        </div>
-        <p className="text-xs text-zinc-600">Private instance · powered by Wipiii Hub</p>
-      </section>
 
-      {/* Form */}
-      <section className="flex items-center justify-center px-5 py-12">
-        <div className="w-full max-w-sm">
-          <div className="mb-8 text-center lg:text-left">
-            <div className="lg:hidden mb-4 flex justify-center">
-              <Logo size="lg" />
-            </div>
-            <h1 className="text-2xl font-bold text-zinc-50">Welcome back</h1>
-            <p className="text-sm text-zinc-500 mt-1">Sign in to split your bills</p>
+        <form onSubmit={handleLogin} className="space-y-3">
+          <div className="space-y-1.5">
+            <label className="label" htmlFor="u">Username</label>
+            <input
+              id="u"
+              value={username}
+              onChange={(e) => setUsername(e.target.value)}
+              autoComplete="username"
+              autoCapitalize="none"
+              required
+              className="input"
+            />
+          </div>
+          <div className="space-y-1.5">
+            <label className="label" htmlFor="p">Password</label>
+            <input
+              id="p"
+              type="password"
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              autoComplete="current-password"
+              required
+              className="input"
+            />
           </div>
 
-          <form onSubmit={handleLogin} className="space-y-4">
-            <div>
-              <label htmlFor="username" className={label}>
-                Username
-              </label>
-              <input
-                id="username"
-                value={username}
-                onChange={(e) => setUsername(e.target.value)}
-                autoComplete="username"
-                autoCapitalize="none"
-                autoCorrect="off"
-                required
-                className={input}
-              />
-            </div>
-            <div>
-              <label htmlFor="password" className={label}>
-                Password
-              </label>
-              <div className="relative">
-                <input
-                  id="password"
-                  type={showPw ? "text" : "password"}
-                  value={password}
-                  onChange={(e) => setPassword(e.target.value)}
-                  autoComplete="current-password"
-                  required
-                  className={`${input} pr-16`}
-                />
-                <button
-                  type="button"
-                  onClick={() => setShowPw((v) => !v)}
-                  className="absolute right-2 top-1/2 -translate-y-1/2 text-xs font-medium text-zinc-500 hover:text-zinc-300 px-2 py-1"
-                >
-                  {showPw ? "Hide" : "Show"}
-                </button>
-              </div>
-            </div>
+          {error && (
+            <p className="rounded-xl border border-red-900/60 bg-red-950/30 px-3 py-2 text-[13px] text-red-300">
+              {error}
+            </p>
+          )}
 
-            {error && <Alert>{error}</Alert>}
+          <button type="submit" disabled={busy} className="btn btn-primary btn-block !mt-4">
+            {busy && <Spinner size={16} />}
+            {busy ? "Checking…" : "Sign in"}
+          </button>
+        </form>
 
-            <button type="submit" disabled={busy} className={`${btn.primary} w-full`}>
-              {busy ? (
-                <>
-                  <Spinner className="size-4" /> Signing in…
-                </>
-              ) : (
-                "Sign in"
-              )}
-            </button>
-          </form>
-          <p className="lg:hidden text-center text-xs text-zinc-600 mt-8">Private instance · powered by Wipiii Hub</p>
-        </div>
-      </section>
+        <p className="mt-6 text-[11px] leading-relaxed text-zinc-600">
+          Payment links can be opened by anyone who has the link, no login needed.
+        </p>
+      </div>
     </main>
   );
 }

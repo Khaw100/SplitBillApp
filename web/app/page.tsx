@@ -1,27 +1,25 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { api, fmtDate, fmtMoney } from "@/lib/api";
-import { Alert, Container, Icon, Skeleton, TopBar, btn } from "@/components/ui";
-
-type BillRow = { id: string; title: string; currency: string; total: number; created_at: string; people?: number };
+import { api, fmtDate, fmtRp } from "@/lib/api";
+import { ChevronRight, EmptyState, Logo, Logout, Plus, Receipt } from "@/lib/ui";
+import { SpotlightCard } from "@/components/spotlight-card";
+import { NumberTicker } from "@/components/number-ticker";
 
 export default function Dashboard() {
   const router = useRouter();
-  const [bills, setBills] = useState<BillRow[] | null>(null);
+  const [bills, setBills] = useState<any[]>([]);
+  const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [query, setQuery] = useState("");
-  const [deleting, setDeleting] = useState<string | null>(null);
 
   useEffect(() => {
     api("/bills")
       .then(setBills)
-      .catch((e) => {
-        setError(e.message);
-        setBills([]);
-      });
+      .catch((e) => setError(e.message || "Couldn't load your bills"))
+      .finally(() => setLoading(false));
   }, []);
 
   const logout = async () => {
@@ -29,152 +27,121 @@ export default function Dashboard() {
     router.replace("/login");
   };
 
-  const remove = async (b: BillRow) => {
-    if (!confirm(`Delete "${b.title}"? Shared links for this bill will stop working.`)) return;
-    setDeleting(b.id);
-    try {
-      await api(`/bills/${b.id}`, { method: "DELETE" });
-      setBills((prev) => (prev || []).filter((x) => x.id !== b.id));
-    } catch (e: any) {
-      setError(e.message);
-    } finally {
-      setDeleting(null);
-    }
-  };
-
-  const filtered = useMemo(
-    () => (bills || []).filter((b) => b.title.toLowerCase().includes(query.trim().toLowerCase())),
-    [bills, query]
-  );
-  const totalSpent = (bills || []).reduce((a, b) => a + (b.total || 0), 0);
+  const total = bills.reduce((s, b) => s + (b.total || 0), 0);
+  const thisMonth = bills.filter(
+    (b) => String(b.created_at).slice(0, 7) === new Date().toISOString().slice(0, 7)
+  ).length;
+  const q = query.trim().toLowerCase();
+  const shown = q ? bills.filter((b) => String(b.title).toLowerCase().includes(q)) : bills;
 
   return (
-    <>
-      <TopBar
-        title="SplitBill"
-        subtitle="Split receipts with friends"
-        right={
-          <button onClick={logout} className={btn.ghost} aria-label="Log out">
-            <Icon name="logout" />
-            <span className="hidden sm:inline">Log out</span>
-          </button>
-        }
-      />
+    <main className="page page-wide">
+      <header className="topbar">
+        <Logo />
+        <button onClick={logout} className="icon-btn" aria-label="Log out" title="Log out">
+          <Logout size={17} />
+        </button>
+      </header>
 
-      <Container className="py-6 sm:py-10 pb-28 lg:pb-10">
-        {/* Hero / CTA */}
-        <section className="grid gap-4 lg:grid-cols-[1.4fr_1fr] mb-8">
-          <Link
-            href="/new"
-            className="group relative overflow-hidden rounded-3xl border border-emerald-500/30 bg-gradient-to-br from-emerald-500/20 via-emerald-500/5 to-zinc-900 p-6 sm:p-8 transition-colors hover:border-emerald-400/60"
-          >
-            <span className="inline-grid place-items-center size-12 rounded-2xl bg-emerald-500 text-emerald-950 shadow-lg shadow-emerald-500/30 mb-5">
-              <Icon name="camera" className="size-6" />
-            </span>
-            <h2 className="text-xl sm:text-2xl font-bold text-zinc-50">New split</h2>
-            <p className="text-sm text-zinc-400 mt-1 max-w-sm">
-              Snap or upload a receipt — AI reads the items, you pick who ordered what.
-            </p>
-            <span className="mt-5 inline-flex items-center gap-1.5 text-sm font-semibold text-emerald-300 group-hover:gap-2.5 transition-all">
-              Start now <Icon name="arrow" />
-            </span>
+      <div className="lg:grid lg:grid-cols-[22rem_1fr] lg:items-start lg:gap-8">
+        {/* Summary + CTA (sticky sidebar on desktop) */}
+        <aside className="side-sticky mb-8 lg:mb-0">
+          <SpotlightCard className="p-5">
+            <div className="dot-grid mask-fade-b pointer-events-none absolute inset-0 opacity-80" />
+            <div
+              aria-hidden
+              className="pointer-events-none absolute -right-12 -top-16 h-44 w-44 rounded-full"
+              style={{
+                background: "radial-gradient(circle, rgba(59,130,246,0.24), transparent 68%)",
+                filter: "blur(4px)",
+              }}
+            />
+            <div className="relative z-[1]">
+              <div className="flex items-center justify-between">
+                <p className="label">Total billed</p>
+                <span className="tag">
+                  {bills.length} {bills.length === 1 ? "bill" : "bills"}
+                </span>
+              </div>
+              <NumberTicker value={total} format={fmtRp} className="money-xl mt-2 block" />
+              <p className="mt-2 text-xs text-zinc-500">
+                {bills.length === 0
+                  ? "no bills yet"
+                  : `${bills.length} recorded${thisMonth ? ` · ${thisMonth} this month` : ""}`}
+              </p>
+            </div>
+          </SpotlightCard>
+
+          <Link href="/new" className="btn btn-primary btn-shine btn-block">
+            <Plus size={18} />
+            New split
           </Link>
+        </aside>
 
-          <div className="grid grid-cols-2 gap-4">
-            <div className="rounded-3xl border border-zinc-800 bg-zinc-900/60 p-5 flex flex-col justify-between">
-              <Icon name="receipt" className="size-5 text-zinc-500" />
-              <div className="mt-6">
-                <p className="text-2xl sm:text-3xl font-bold text-zinc-50 tabular-nums">{bills ? bills.length : "–"}</p>
-                <p className="text-xs text-zinc-500 mt-0.5">Bills split</p>
-              </div>
-            </div>
-            <div className="rounded-3xl border border-zinc-800 bg-zinc-900/60 p-5 flex flex-col justify-between min-w-0">
-              <Icon name="sparkles" className="size-5 text-zinc-500" />
-              <div className="mt-6 min-w-0">
-                <p className="text-lg sm:text-2xl font-bold text-zinc-50 tabular-nums truncate">{bills ? fmtMoney(totalSpent) : "–"}</p>
-                <p className="text-xs text-zinc-500 mt-0.5">Total tracked</p>
-              </div>
-            </div>
-          </div>
-        </section>
-
-        {/* List */}
-        <section>
-          <div className="flex flex-col sm:flex-row sm:items-center gap-3 justify-between mb-4">
-            <h2 className="text-sm font-semibold text-zinc-300">Past bills</h2>
-            {bills && bills.length > 3 && (
+        {/* History */}
+        <section className="min-w-0">
+          <div className="mb-2.5 flex items-center justify-between gap-3">
+            <h2 className="label">History</h2>
+            {bills.length > 4 ? (
               <input
                 value={query}
                 onChange={(e) => setQuery(e.target.value)}
-                placeholder="Search bills…"
-                className="w-full sm:w-64 bg-zinc-900 border border-zinc-800 rounded-xl px-3.5 h-10 text-base sm:text-sm placeholder:text-zinc-600 focus:outline-none focus:border-emerald-500/60"
+                placeholder="Search…"
+                aria-label="Search bills"
+                className="input !h-8 !w-40 text-xs sm:!w-56"
               />
+            ) : (
+              bills.length > 0 && <span className="text-[11px] text-zinc-600">{bills.length} bills</span>
             )}
           </div>
 
           {error && (
-            <div className="mb-4">
-              <Alert>{error}</Alert>
-            </div>
+            <p className="mb-3 rounded-xl border border-red-900/60 bg-red-950/30 px-3.5 py-2.5 text-[13px] text-red-300">
+              {error}
+            </p>
           )}
 
-          {bills === null ? (
-            <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
-              {[0, 1, 2].map((i) => (
-                <Skeleton key={i} className="h-[84px]" />
+          {loading ? (
+            <div className="grid gap-2 xl:grid-cols-2">
+              {[0, 1, 2, 3].map((i) => (
+                <div key={i} className="skeleton h-[4.25rem]" />
               ))}
             </div>
           ) : bills.length === 0 ? (
-            <div className="rounded-3xl border border-dashed border-zinc-800 p-10 text-center">
-              <Icon name="receipt" className="size-8 mx-auto text-zinc-700" />
-              <p className="text-sm text-zinc-400 mt-3">No bills yet</p>
-              <p className="text-xs text-zinc-600 mt-1">Upload your first receipt to get started.</p>
-            </div>
-          ) : filtered.length === 0 ? (
-            <p className="text-sm text-zinc-500 py-6 text-center">No bills match “{query}”.</p>
+            <EmptyState
+              icon={<Receipt size={26} />}
+              title="No bills yet"
+              body="Snap your first receipt, split it with friends, then send each of them their payment link."
+            />
+          ) : shown.length === 0 ? (
+            <p className="py-8 text-center text-sm text-zinc-500">No bills match “{query}”.</p>
           ) : (
-            <ul className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
-              {filtered.map((b) => (
-                <li key={b.id} className="group relative">
+            <ul className="grid gap-2 xl:grid-cols-2">
+              {shown.map((b) => (
+                <li key={b.id}>
                   <Link
                     href={`/bill/${b.id}`}
-                    className="flex items-center gap-3 rounded-2xl border border-zinc-800 bg-zinc-900/60 hover:bg-zinc-900 hover:border-zinc-700 pl-4 pr-14 py-3.5 transition-colors"
+                    className="card flex items-center gap-3 px-4 py-3.5 transition-colors hover:border-zinc-700"
                   >
-                    <span className="size-10 shrink-0 grid place-items-center rounded-xl bg-zinc-950 border border-zinc-800 text-zinc-500">
-                      <Icon name="receipt" />
+                    <span className="avatar">
+                      <Receipt size={16} />
                     </span>
-                    <div className="min-w-0 flex-1">
-                      <p className="truncate text-sm font-medium text-zinc-100">{b.title}</p>
-                      <p className="truncate text-xs text-zinc-500">
+                    <span className="min-w-0 flex-1">
+                      <span className="block truncate text-sm font-medium text-zinc-100">{b.title}</span>
+                      <span className="mt-0.5 block truncate text-[11px] text-zinc-500">
                         {fmtDate(b.created_at)}
-                        {typeof b.people === "number" && ` · ${b.people} ${b.people === 1 ? "person" : "people"}`}
-                      </p>
-                    </div>
-                    <p className="text-sm font-semibold text-emerald-300 tabular-nums whitespace-nowrap">
-                      {fmtMoney(b.total, b.currency)}
-                    </p>
+                        {b.host_is_owner === 0 ? ` · host ${b.host_name}` : ""}
+                      </span>
+                    </span>
+                    <span className="num shrink-0 text-sm font-semibold text-zinc-200">{fmtRp(b.total)}</span>
+                    <ChevronRight size={16} className="shrink-0 text-zinc-600" />
                   </Link>
-                  <button
-                    onClick={() => remove(b)}
-                    disabled={deleting === b.id}
-                    aria-label={`Delete ${b.title}`}
-                    className="absolute right-2 top-1/2 -translate-y-1/2 size-9 grid place-items-center rounded-lg text-zinc-600 hover:text-red-400 hover:bg-red-500/10 transition-colors lg:opacity-0 lg:group-hover:opacity-100 focus:opacity-100"
-                  >
-                    <Icon name="trash" />
-                  </button>
                 </li>
               ))}
             </ul>
           )}
         </section>
-      </Container>
-
-      {/* Mobile floating CTA */}
-      <div className="lg:hidden fixed inset-x-0 bottom-0 z-30 px-4 pb-safe-3 pt-3 bg-gradient-to-t from-zinc-950 via-zinc-950/90 to-transparent">
-        <Link href="/new" className={`${btn.primary} w-full`}>
-          <Icon name="plus" /> New split
-        </Link>
       </div>
-    </>
+    </main>
   );
 }

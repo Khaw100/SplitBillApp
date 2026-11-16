@@ -1,386 +1,256 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
-import { api, fmtMoney } from "@/lib/api";
-import { type Draft, clearDraft, computeSplit, loadDraft, saveDraft } from "@/lib/split";
-import { ActionBar, Alert, Avatar, Container, Icon, Spinner, Stepper, TopBar, btn, input } from "@/components/ui";
+import { api, fmtRp } from "@/lib/api";
+import { AppHeader, Close, Plus, Spinner, Users, Wallet } from "@/lib/ui";
+
+const DRAFT_KEY = "sb_draft";
+const HUB_CONFIG_URL = "https://dashboard.rakhawiratama.com/projects/2";
 
 export default function AssignPage() {
   const router = useRouter();
-  const nameRef = useRef<HTMLInputElement>(null);
-  const [draft, setDraft] = useState<Draft | null>(null);
+  const [draft, setDraft] = useState<any>(null);
+  const [settings, setSettings] = useState<{ name: string; phone: string; accounts: any[] }>({
+    name: "you",
+    phone: "",
+    accounts: [],
+  });
   const [participants, setParticipants] = useState<string[]>([]);
-  const [assignments, setAssignments] = useState<Record<string, string[]>>({});
   const [newName, setNewName] = useState("");
   const [nameError, setNameError] = useState<string | null>(null);
+  const [hostMode, setHostMode] = useState<"me" | "other">("me");
+  const [hostName, setHostName] = useState("");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    const d = loadDraft();
-    if (!d || !d.items?.length) {
+    let d: any = null;
+    try {
+      d = JSON.parse(sessionStorage.getItem(DRAFT_KEY) || "null");
+    } catch {}
+    if (!d?.items?.length) {
       router.replace("/new");
       return;
     }
     setDraft(d);
-    const ps = d.participants || [];
-    setParticipants(ps);
-    setAssignments(Object.fromEntries(ps.map((p) => [p, d.assignments?.[p] || []])));
+    setParticipants(Array.isArray(d.participants) ? d.participants : []);
+    if (d.hostMode === "other") setHostMode("other");
+    if (typeof d.hostName === "string") setHostName(d.hostName);
+    api("/settings")
+      .then((s) => setSettings(s))
+      .catch(() => {});
   }, [router]);
 
-  // Persist progress so "Back" → edit → "Next" doesn't lose who's in the bill
+  // Keep people/host in the draft so "Back" → edit items → "Next" doesn't lose them.
   useEffect(() => {
-    if (draft) saveDraft({ ...draft, participants, assignments });
-  }, [draft, participants, assignments]);
+    if (!draft) return;
+    try {
+      sessionStorage.setItem(DRAFT_KEY, JSON.stringify({ ...draft, participants, hostMode, hostName }));
+    } catch {}
+  }, [draft, participants, hostMode, hostName]);
 
-  const currency = draft?.currency || "Rp";
-  const items = draft?.items || [];
-
-  const preview = useMemo(
-    () => (draft ? computeSplit(items, Object.fromEntries(participants.map((p) => [p, assignments[p] || []])), draft.total) : []),
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [draft, participants, assignments]
-  );
-
-  if (!draft) {
+  if (!draft)
     return (
-      <main className="min-h-dvh grid place-items-center">
-        <Spinner className="size-6 text-zinc-600" />
+      <main className="page flex min-h-[60dvh] items-center justify-center">
+        <Spinner size={20} />
       </main>
     );
-  }
-
-  const owners = (itemId: string) => participants.filter((p) => (assignments[p] || []).includes(itemId));
-  const unassigned = items.filter((it) => owners(it.id).length === 0);
 
   const addParticipant = () => {
     const name = newName.trim().replace(/\s+/g, " ");
     if (!name) return;
     if (participants.some((p) => p.toLowerCase() === name.toLowerCase())) {
-      setNameError(`"${name}" is already added`);
+      setNameError(`“${name}” is already on the list`);
       return;
     }
     setParticipants((p) => [...p, name]);
-    setAssignments((a) => ({ ...a, [name]: [] }));
     setNewName("");
     setNameError(null);
-    nameRef.current?.focus();
   };
 
-  const removeParticipant = (p: string) => {
-    setParticipants((ps) => ps.filter((x) => x !== p));
-    setAssignments(({ [p]: _, ...rest }) => rest);
-  };
-
-  const toggle = (participant: string, itemId: string) =>
-    setAssignments((prev) => {
-      const cur = prev[participant] || [];
-      return { ...prev, [participant]: cur.includes(itemId) ? cur.filter((i) => i !== itemId) : [...cur, itemId] };
-    });
-
-  /** Item → everyone, or nobody if everyone already has it. */
-  const toggleEveryone = (itemId: string) => {
-    const all = owners(itemId).length === participants.length;
-    setAssignments((prev) =>
-      Object.fromEntries(
-        participants.map((p) => {
-          const cur = (prev[p] || []).filter((i) => i !== itemId);
-          return [p, all ? cur : [...cur, itemId]];
-        })
-      )
-    );
-  };
-
-  const splitAllEqually = () =>
-    setAssignments(Object.fromEntries(participants.map((p) => [p, items.map((i) => i.id)])));
+  const hostOk = hostMode === "me" || hostName.trim().length > 0;
+  const canSave = participants.length > 0 && hostOk && !saving;
+  const hint = participants.length === 0 ? "Add at least one person" : !hostOk ? "Enter the host's name" : null;
 
   const save = async () => {
     setSaving(true);
     setError(null);
     try {
-      const d = await api("/bills", {
+      const bill = await api("/bills", {
         method: "POST",
         body: JSON.stringify({
           title: draft.title,
-          currency,
           items: draft.items,
           subtotal: draft.subtotal,
           total: draft.total,
           participants,
-          assignments: Object.fromEntries(participants.map((p) => [p, assignments[p] || []])),
+          assignments: {},
+          host_is_owner: hostMode === "me",
+          host_name: hostMode === "me" ? settings.name : hostName.trim(),
         }),
       });
-      clearDraft();
-      router.push(`/bill/${d.id}`);
+      // Pre-create pay links (idempotent); the bill page creates any that fail here.
+      await Promise.all(
+        participants.map((p) =>
+          api(`/bills/${bill.id}/paylink/${encodeURIComponent(p)}`, { method: "POST" }).catch(() => null)
+        )
+      );
+      sessionStorage.removeItem(DRAFT_KEY);
+      router.replace(`/bill/${bill.id}`);
     } catch (e: any) {
       setError(e.message || "Couldn't save the bill");
       setSaving(false);
     }
   };
 
-  const canSave = participants.length > 0 && unassigned.length === 0 && !saving;
-  const hint =
-    participants.length === 0
-      ? "Add at least one person"
-      : unassigned.length > 0
-        ? `${unassigned.length} item${unassigned.length > 1 ? "s" : ""} not assigned yet`
-        : null;
+  const hostCard = (
+    <section>
+      <div className="mb-2 flex items-center gap-2">
+        <Wallet size={14} className="text-zinc-500" />
+        <h2 className="label">Who gets paid (host)</h2>
+      </div>
+      <div className="card p-4">
+        <div className="flex flex-wrap gap-2">
+          <button onClick={() => setHostMode("me")} className={`pill ${hostMode === "me" ? "pill-on" : ""}`}>
+            Me · {settings.name}
+          </button>
+          <button onClick={() => setHostMode("other")} className={`pill ${hostMode === "other" ? "pill-on" : ""}`}>
+            Someone else
+          </button>
+        </div>
+
+        {hostMode === "other" && (
+          <input
+            value={hostName}
+            onChange={(e) => setHostName(e.target.value)}
+            placeholder="Host's name, e.g. Budi"
+            className="input mt-3 !h-10 text-sm"
+          />
+        )}
+
+        <p className="mt-3 text-[11px] leading-relaxed text-zinc-500">
+          {hostMode === "me" ? (
+            settings.accounts.length > 0 ? (
+              <>
+                Your payment details are included:{" "}
+                <span className="text-zinc-300">{settings.accounts.map((a: any) => a.label).join(", ")}</span>
+                {settings.phone ? ` · WhatsApp ${settings.phone}` : ""}.{" "}
+                <a href={HUB_CONFIG_URL} target="_blank" rel="noreferrer" className="link">
+                  Edit in Hub
+                </a>
+              </>
+            ) : (
+              <>
+                No payment accounts in Wipiii Hub yet, so friends will only see your name.{" "}
+                <a href={HUB_CONFIG_URL} target="_blank" rel="noreferrer" className="link">
+                  Fill in app config
+                </a>
+              </>
+            )
+          ) : (
+            <>Payment details aren&apos;t shared. Friends only see the host&apos;s name and their own total.</>
+          )}
+        </p>
+      </div>
+    </section>
+  );
+
+  const peopleCard = (
+    <section>
+      <div className="mb-2 flex items-center gap-2">
+        <Users size={14} className="text-zinc-500" />
+        <h2 className="label">People ({participants.length})</h2>
+      </div>
+      <form
+        onSubmit={(e) => {
+          e.preventDefault();
+          addParticipant();
+        }}
+        className="flex gap-2"
+      >
+        <input
+          value={newName}
+          onChange={(e) => {
+            setNewName(e.target.value);
+            setNameError(null);
+          }}
+          placeholder="Friend's name…"
+          enterKeyHint="done"
+          autoCapitalize="words"
+          className="input flex-1"
+        />
+        <button type="submit" disabled={!newName.trim()} className="btn btn-secondary !px-4" aria-label="Add person">
+          <Plus size={17} />
+        </button>
+      </form>
+      {nameError && <p className="mt-2 text-[11px] text-amber-400">{nameError}</p>}
+      {participants.length > 0 ? (
+        <div className="mt-2.5 flex flex-wrap gap-2">
+          {participants.map((p) => (
+            <span key={p} className="pill pill-on cursor-default">
+              {p}
+              <button onClick={() => setParticipants((ps) => ps.filter((x) => x !== p))} aria-label={`Remove ${p}`}>
+                <Close size={13} />
+              </button>
+            </span>
+          ))}
+        </div>
+      ) : (
+        <p className="mt-2.5 text-[11px] leading-relaxed text-zinc-500">
+          Add your friends&apos; names. Each of them gets a personal link to tick what they had, so you don&apos;t
+          have to split anything by hand.
+        </p>
+      )}
+    </section>
+  );
 
   return (
-    <>
-      <TopBar title="Who ordered what?" subtitle={draft.title} back="/new" />
+    <main className="page page-bar page-wide">
+      <AppHeader title="Who's in?" subtitle={draft.title} back="/new" />
 
-      <Container className="py-6 pb-36 lg:pb-12">
-        <div className="mb-6">
-          <Stepper step={2} />
+      <div className="lg:grid lg:grid-cols-[1fr_22rem] lg:items-start lg:gap-8">
+        <div className="space-y-5">
+          {hostCard}
+          {peopleCard}
         </div>
 
-        <div className="grid gap-6 lg:grid-cols-[1fr_340px] lg:items-start">
-          <div className="space-y-6 min-w-0">
-            {/* ── People ─────────────────────────────────────────────── */}
-            <section className="rounded-2xl border border-zinc-800 bg-zinc-900/60 p-4">
-              <h2 className="text-sm font-semibold text-zinc-200 mb-3">People</h2>
-              <form
-                onSubmit={(e) => {
-                  e.preventDefault();
-                  addParticipant();
-                }}
-                className="flex gap-2"
-              >
-                <input
-                  ref={nameRef}
-                  value={newName}
-                  onChange={(e) => {
-                    setNewName(e.target.value);
-                    setNameError(null);
-                  }}
-                  placeholder="Add a name, e.g. Budi"
-                  enterKeyHint="done"
-                  autoCapitalize="words"
-                  className={input}
-                />
-                <button type="submit" disabled={!newName.trim()} className={`${btn.secondary} shrink-0`}>
-                  <Icon name="plus" /> <span className="hidden sm:inline">Add</span>
-                </button>
-              </form>
-              {nameError && <p className="text-xs text-amber-400 mt-2">{nameError}</p>}
+        <aside className="side-sticky mt-5 lg:mt-0">
+          <section className="card p-4">
+            <h2 className="label mb-2">What happens next</h2>
+            <ol className="space-y-1.5 text-[12px] leading-relaxed text-zinc-400">
+              <li>1. Each friend opens their personal link (no login).</li>
+              <li>2. They tick what they had; shared items are split automatically.</li>
+              <li>3. They see their total and pay {hostMode === "me" ? "you" : hostName.trim() || "the host"}.</li>
+            </ol>
+            <p className="mt-3 border-t border-[var(--line)] pt-3 text-[11px] text-zinc-500">
+              Anything nobody ticks counts as your share.
+            </p>
+          </section>
 
-              {participants.length > 0 && (
-                <div className="flex flex-wrap gap-2 mt-4">
-                  {participants.map((p) => (
-                    <span key={p} className="inline-flex items-center gap-2 rounded-full bg-zinc-950 border border-zinc-800 pl-1 pr-1 py-1">
-                      <Avatar name={p} className="size-7 text-[10px]" />
-                      <span className="text-sm text-zinc-200 max-w-[10rem] truncate">{p}</span>
-                      <button
-                        onClick={() => removeParticipant(p)}
-                        aria-label={`Remove ${p}`}
-                        className="size-6 grid place-items-center rounded-full text-zinc-500 hover:text-red-400 hover:bg-red-500/10"
-                      >
-                        <Icon name="x" className="size-3.5" />
-                      </button>
-                    </span>
-                  ))}
-                </div>
-              )}
+          {error && (
+            <p className="rounded-xl border border-red-900/60 bg-red-950/30 px-3.5 py-2.5 text-[13px] text-red-300">
+              {error}
+            </p>
+          )}
 
-              {participants.length > 1 && (
-                <button onClick={splitAllEqually} className="mt-4 text-sm font-medium text-emerald-400 hover:text-emerald-300">
-                  Everyone shares everything (split equally)
-                </button>
-              )}
-            </section>
-
-            {/* ── Items ──────────────────────────────────────────────── */}
-            {participants.length === 0 ? (
-              <div className="rounded-2xl border border-dashed border-zinc-800 p-8 text-center">
-                <Icon name="users" className="size-7 mx-auto text-zinc-700" />
-                <p className="text-sm text-zinc-400 mt-3">Add the people who joined this bill</p>
-                <p className="text-xs text-zinc-600 mt-1">Then tap their names on each item they ordered.</p>
+          <div className="bottom-bar">
+            <div className="bottom-bar-inner">
+              <div className="mb-2 flex items-center justify-between text-[12px]">
+                <span className="text-zinc-500">
+                  {participants.length} {participants.length === 1 ? "person" : "people"}
+                  {hint && <span className="text-amber-400/90"> · {hint}</span>}
+                </span>
+                <span className="num text-zinc-300">{fmtRp(draft.total)}</span>
               </div>
-            ) : (
-              <section>
-                <div className="flex items-end justify-between mb-3 gap-3">
-                  <h2 className="text-sm font-semibold text-zinc-200">
-                    Items <span className="text-zinc-500 font-normal">· tap names to assign</span>
-                  </h2>
-                  <span className={`text-xs tabular-nums ${unassigned.length ? "text-amber-400" : "text-emerald-400"}`}>
-                    {items.length - unassigned.length}/{items.length} assigned
-                  </span>
-                </div>
-
-                {/* Mobile / tablet: one card per item with name chips */}
-                <ul className="space-y-3 lg:hidden">
-                  {items.map((it) => {
-                    const own = owners(it.id);
-                    const lineTotal = it.qty * it.price;
-                    return (
-                      <li
-                        key={it.id}
-                        className={`rounded-2xl border p-4 transition-colors ${
-                          own.length ? "border-zinc-800 bg-zinc-900/60" : "border-amber-500/30 bg-amber-500/5"
-                        }`}
-                      >
-                        <div className="flex items-start gap-3">
-                          <div className="min-w-0 flex-1">
-                            <p className="text-sm font-medium text-zinc-100 break-words">{it.name}</p>
-                            <p className="text-xs text-zinc-500 tabular-nums">
-                              {it.qty}× {fmtMoney(it.price, currency)}
-                              {own.length > 1 && (
-                                <span className="text-amber-300/90"> · {fmtMoney(lineTotal / own.length, currency)} each</span>
-                              )}
-                            </p>
-                          </div>
-                          <p className="text-sm font-semibold text-zinc-200 tabular-nums whitespace-nowrap">{fmtMoney(lineTotal, currency)}</p>
-                        </div>
-                        <div className="flex flex-wrap gap-2 mt-3">
-                          {participants.map((p) => {
-                            const on = own.includes(p);
-                            return (
-                              <button
-                                key={p}
-                                onClick={() => toggle(p, it.id)}
-                                aria-pressed={on}
-                                className={`inline-flex items-center gap-1.5 h-9 rounded-full px-3.5 text-sm border transition-colors ${
-                                  on
-                                    ? "bg-emerald-500/15 border-emerald-500/60 text-emerald-200"
-                                    : "bg-zinc-950 border-zinc-800 text-zinc-400 active:bg-zinc-900"
-                                }`}
-                              >
-                                {on && <Icon name="check" className="size-3.5" />}
-                                <span className="max-w-[8rem] truncate">{p}</span>
-                              </button>
-                            );
-                          })}
-                          {participants.length > 1 && (
-                            <button
-                              onClick={() => toggleEveryone(it.id)}
-                              className="h-9 rounded-full px-3.5 text-sm text-zinc-500 hover:text-zinc-300 border border-dashed border-zinc-800"
-                            >
-                              {own.length === participants.length ? "Clear" : "Everyone"}
-                            </button>
-                          )}
-                        </div>
-                      </li>
-                    );
-                  })}
-                </ul>
-
-                {/* Desktop: items × people matrix */}
-                <div className="hidden lg:block rounded-2xl border border-zinc-800 bg-zinc-900/60 overflow-x-auto">
-                  <table className="w-full text-sm">
-                    <thead>
-                      <tr className="border-b border-zinc-800 text-xs text-zinc-500">
-                        <th className="text-left font-medium px-4 py-3 sticky left-0 bg-zinc-900 min-w-[200px]">Item</th>
-                        <th className="text-right font-medium px-3 py-3 whitespace-nowrap">Amount</th>
-                        {participants.map((p) => (
-                          <th key={p} className="px-2 py-3 font-medium">
-                            <div className="flex flex-col items-center gap-1">
-                              <Avatar name={p} className="size-7 text-[10px]" />
-                              <span className="max-w-[5.5rem] truncate text-zinc-400">{p}</span>
-                            </div>
-                          </th>
-                        ))}
-                        <th className="px-3 py-3 font-medium">All</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {items.map((it) => {
-                        const own = owners(it.id);
-                        return (
-                          <tr key={it.id} className={`border-b border-zinc-800/60 last:border-0 ${own.length ? "" : "bg-amber-500/5"}`}>
-                            <td className="px-4 py-2.5 sticky left-0 bg-zinc-900">
-                              <p className="text-zinc-100">{it.name}</p>
-                              <p className="text-xs text-zinc-500 tabular-nums">
-                                {it.qty}× {fmtMoney(it.price, currency)}
-                                {!own.length && <span className="text-amber-400"> · unassigned</span>}
-                              </p>
-                            </td>
-                            <td className="px-3 py-2.5 text-right tabular-nums text-zinc-300 whitespace-nowrap">
-                              {fmtMoney(it.qty * it.price, currency)}
-                            </td>
-                            {participants.map((p) => {
-                              const on = own.includes(p);
-                              return (
-                                <td key={p} className="px-2 py-2.5 text-center">
-                                  <button
-                                    onClick={() => toggle(p, it.id)}
-                                    aria-pressed={on}
-                                    aria-label={`${p} had ${it.name}`}
-                                    className={`size-8 rounded-lg border inline-grid place-items-center transition-colors ${
-                                      on
-                                        ? "bg-emerald-500 border-emerald-500 text-emerald-950"
-                                        : "border-zinc-700 text-transparent hover:border-zinc-500"
-                                    }`}
-                                  >
-                                    <Icon name="check" className="size-4" />
-                                  </button>
-                                </td>
-                              );
-                            })}
-                            <td className="px-3 py-2.5 text-center">
-                              <button
-                                onClick={() => toggleEveryone(it.id)}
-                                className="text-xs text-zinc-500 hover:text-emerald-300 whitespace-nowrap"
-                              >
-                                {own.length === participants.length ? "Clear" : "All"}
-                              </button>
-                            </td>
-                          </tr>
-                        );
-                      })}
-                    </tbody>
-                  </table>
-                </div>
-              </section>
-            )}
-          </div>
-
-          {/* ── Live preview (sidebar on desktop) ───────────────────── */}
-          <aside className="space-y-4 lg:sticky lg:top-24">
-            <div className="rounded-2xl border border-zinc-800 bg-zinc-900/60">
-              <div className="flex items-center justify-between px-4 py-3.5 border-b border-zinc-800">
-                <h2 className="text-sm font-semibold text-zinc-200">Preview</h2>
-                <span className="text-xs text-zinc-500">incl. tax/service</span>
-              </div>
-              {preview.length === 0 ? (
-                <p className="px-4 py-6 text-sm text-zinc-500 text-center">Totals per person show up here.</p>
-              ) : (
-                <ul className="divide-y divide-zinc-800/60">
-                  {preview.map((p) => (
-                    <li key={p.name} className="flex items-center gap-3 px-4 py-2.5">
-                      <Avatar name={p.name} className="size-7 text-[10px]" />
-                      <span className="min-w-0 flex-1 truncate text-sm text-zinc-300">{p.name}</span>
-                      <span className="text-sm font-semibold tabular-nums text-zinc-100">{fmtMoney(p.total, currency)}</span>
-                    </li>
-                  ))}
-                </ul>
-              )}
-              <div className="flex justify-between px-4 py-3 border-t border-zinc-800 text-sm">
-                <span className="text-zinc-500">Grand total</span>
-                <span className="font-bold text-emerald-300 tabular-nums">{fmtMoney(draft.total, currency)}</span>
-              </div>
-            </div>
-
-            {error && <Alert>{error}</Alert>}
-
-            <ActionBar>
-              {hint && <p className="text-center text-xs text-amber-400/90 mb-2">{hint}</p>}
-              <button onClick={save} disabled={!canSave} className={`${btn.primary} w-full`}>
-                {saving ? (
-                  <>
-                    <Spinner className="size-4" /> Saving…
-                  </>
-                ) : (
-                  <>
-                    Save & see report <Icon name="arrow" />
-                  </>
-                )}
+              <button onClick={save} disabled={!canSave} className="btn btn-primary btn-block">
+                {saving ? <Spinner size={16} /> : null}
+                {saving ? "Saving…" : "Create bill & links"}
               </button>
-            </ActionBar>
-          </aside>
-        </div>
-      </Container>
-    </>
+            </div>
+          </div>
+        </aside>
+      </div>
+    </main>
   );
 }

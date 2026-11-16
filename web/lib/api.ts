@@ -28,14 +28,6 @@ export function fmtMoney(n: number, currency = "Rp") {
 /** Back-compat alias */
 export const fmtRp = (n: number) => fmtMoney(n, "Rp");
 
-/** SQLite `datetime('now')` is UTC without a zone marker → show in local time. */
-export function fmtDate(s: string) {
-  if (!s) return "";
-  const d = new Date(s.replace(" ", "T") + (/[zZ]|[+-]\d\d:?\d\d$/.test(s) ? "" : "Z"));
-  if (isNaN(d.getTime())) return s;
-  return d.toLocaleString("en-GB", { day: "numeric", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" });
-}
-
 /** Clipboard API is unavailable on plain-http origins → fall back to execCommand. */
 export async function copyText(text: string) {
   try {
@@ -54,28 +46,35 @@ export async function copyText(text: string) {
   }
 }
 
-export function initials(name: string) {
-  return name
-    .split(/\s+/)
-    .filter(Boolean)
-    .slice(0, 2)
-    .map((w) => w[0]!.toUpperCase())
-    .join("");
+const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+
+/**
+ * SQLite `datetime('now')` is UTC without a zone marker → show in local time.
+ * "2026-08-24 13:37:00" -> "24 Aug · 20:37" (in UTC+7)
+ */
+export function fmtDate(raw: string) {
+  const s = String(raw || "");
+  const d = new Date(s.replace(" ", "T") + (/[zZ]|[+-]\d\d:?\d\d$/.test(s) ? "" : "Z"));
+  if (isNaN(d.getTime())) return s.slice(0, 10);
+  const hh = String(d.getHours()).padStart(2, "0");
+  const mm = String(d.getMinutes()).padStart(2, "0");
+  return `${d.getDate()} ${MONTHS[d.getMonth()]} · ${hh}:${mm}`;
 }
 
-const AVATAR_COLORS = [
-  "bg-emerald-500/15 text-emerald-300 ring-emerald-500/30",
-  "bg-sky-500/15 text-sky-300 ring-sky-500/30",
-  "bg-violet-500/15 text-violet-300 ring-violet-500/30",
-  "bg-amber-500/15 text-amber-300 ring-amber-500/30",
-  "bg-rose-500/15 text-rose-300 ring-rose-500/30",
-  "bg-teal-500/15 text-teal-300 ring-teal-500/30",
-  "bg-fuchsia-500/15 text-fuchsia-300 ring-fuchsia-500/30",
-  "bg-lime-500/15 text-lime-300 ring-lime-500/30",
-];
+/** RFC 4180 CSV cell. */
+export function csvCell(v: unknown) {
+  const s = String(v ?? "");
+  return /[",\n\r]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+}
 
-export function avatarColor(name: string) {
-  let h = 0;
-  for (const ch of name) h = (h * 31 + ch.charCodeAt(0)) >>> 0;
-  return AVATAR_COLORS[h % AVATAR_COLORS.length];
+export function downloadCsv(filename: string, rows: unknown[][]) {
+  const body = rows.map((r) => r.map(csvCell).join(",")).join("\r\n");
+  // BOM so Excel reads UTF-8 names correctly
+  const blob = new Blob(["﻿" + body], { type: "text/csv;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
