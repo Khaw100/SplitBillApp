@@ -206,10 +206,18 @@ export default function BillReport() {
           </div>
         )}
         {host?.is_owner && host.accounts?.length === 0 && !host.phone && (
-          <p className="mt-3 border-t border-[var(--line)] pt-3 text-[11px] text-amber-400/90">
-            Rekening belum diisi.{" "}
-            <Link href="/settings" className="link">Lengkapi di pengaturan</Link> biar temanmu tahu
-            harus transfer ke mana.
+          <p className="mt-3 border-t border-[var(--line)] pt-3 text-[11px] leading-relaxed text-amber-400/90">
+            Rekening belum diisi di Wipiii Hub.{" "}
+            <a
+              href="https://dashboard.rakhawiratama.com/projects/2"
+              target="_blank"
+              rel="noreferrer"
+              className="link"
+            >
+              Buka App Config
+            </a>{" "}
+            (key <code className="text-amber-300/80">owner_accounts</code>) biar temanmu tahu harus
+            transfer ke mana.
           </p>
         )}
       </section>

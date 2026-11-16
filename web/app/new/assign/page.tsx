@@ -153,12 +153,26 @@ export default function AssignPage() {
                     {settings.accounts.map((a: any) => a.label).join(", ")}
                   </span>
                   {settings.phone ? ` · WA ${settings.phone}` : ""}.{" "}
-                  <a href="/settings" className="link">Ubah</a>
+                  <a
+                    href="https://dashboard.rakhawiratama.com/projects/2"
+                    target="_blank"
+                    rel="noreferrer"
+                    className="link"
+                  >
+                    Ubah di Hub
+                  </a>
                 </>
               ) : (
                 <>
-                  Belum ada rekening tersimpan. Temanmu hanya akan lihat nama kamu.{" "}
-                  <a href="/settings" className="link">Isi sekarang</a>
+                  Belum ada rekening di Wipiii Hub. Temanmu hanya akan lihat nama kamu.{" "}
+                  <a
+                    href="https://dashboard.rakhawiratama.com/projects/2"
+                    target="_blank"
+                    rel="noreferrer"
+                    className="link"
+                  >
+                    Isi app config
+                  </a>
                 </>
               )
             ) : (

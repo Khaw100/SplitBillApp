@@ -38,6 +38,9 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+_CFG_CACHE = {"data": None, "at": 0.0}
+_CFG_TTL = 60
+
 signer = TimestampSigner(SECRET_KEY)
 
 # ── DB ────────────────────────────────────────────────────────────────────────
@@ -96,28 +99,39 @@ def get_db():
 # ── Settings (owner profile: name, phone, payment accounts) ───────────────────
 
 
-def hub_app_config() -> dict:
-    """Fetch this project's generic app config from Wipiii Hub.
+def hub_app_config(force: bool = False) -> dict:
+    """This project's generic app config from Wipiii Hub (source of truth).
 
-    Central store for app-level settings (owner name / phone / accounts), so the
-    app doesn't need its own secrets or a separate config UI to boot.
+    Owner profile (name / phone / payout accounts) lives in the Hub project's
+    App Config JSON, edited from the Hub project page. Cached briefly so a bill
+    page with several participants does not hammer the Hub API.
     """
+    import time
+
     import httpx
+
+    now = time.time()
+    if not force and _CFG_CACHE["data"] is not None and now - _CFG_CACHE["at"] < _CFG_TTL:
+        return _CFG_CACHE["data"]
 
     project_key = os.environ.get("HUB_PROJECT_API_KEY", "")
     if not project_key:
         return {}
+    cfg: dict = {}
     try:
         r = httpx.get(
             f"{HUB_BASE}/projects/{HUB_PROJECT_ID}/app-config",
             headers={"Authorization": f"Bearer {project_key}"},
-            timeout=10,
+            timeout=8,
         )
-        if r.status_code != 200:
-            return {}
-        return r.json().get("config", {})
+        if r.status_code == 200:
+            cfg = r.json().get("config", {}) or {}
     except Exception:
-        return {}
+        cfg = {}
+    if cfg:
+        _CFG_CACHE["data"] = cfg
+        _CFG_CACHE["at"] = now
+    return cfg
 
 
 def normalize_account(a: dict) -> dict:
@@ -130,28 +144,25 @@ def normalize_account(a: dict) -> dict:
 
 
 def read_settings() -> dict:
-    with get_db() as db:
-        row = db.execute("SELECT name,phone,accounts_json FROM settings WHERE id=1").fetchone()
-    if not row:
-        return {"name": "Wipiii", "phone": "", "accounts": []}
-    accounts = [normalize_account(a) for a in json.loads(row["accounts_json"] or "[]")]
-    return {"name": row["name"], "phone": row["phone"], "accounts": accounts}
+    """Owner profile: Hub app config first, local/env row only as a fallback."""
+    cfg = hub_app_config()
+    name = (cfg.get("owner_name") or cfg.get("recipient_name") or "").strip()
+    phone = (cfg.get("owner_phone") or cfg.get("recipient_phone") or "").strip()
+    raw_accounts = cfg.get("owner_accounts") or cfg.get("recipient_accounts") or []
+    accounts = [normalize_account(a) for a in raw_accounts if (a.get("number") or "").strip()]
 
-
-def seed_settings() -> None:
-    """First boot: seed the owner profile from Hub app-config (or env)."""
-    with get_db() as db:
-        row = db.execute("SELECT id FROM settings WHERE id=1").fetchone()
+    if not name and not phone and not accounts:
+        with get_db() as db:
+            row = db.execute(
+                "SELECT name,phone,accounts_json FROM settings WHERE id=1"
+            ).fetchone()
         if row:
-            return
-        cfg = hub_app_config()
-        name = cfg.get("recipient_name") or os.environ.get("OWNER_NAME") or "Wipiii"
-        phone = cfg.get("recipient_phone") or os.environ.get("OWNER_PHONE") or ""
-        accounts = [normalize_account(a) for a in (cfg.get("recipient_accounts") or [])]
-        db.execute(
-            "INSERT INTO settings (id,name,phone,accounts_json) VALUES (1,?,?,?)",
-            (name, phone, json.dumps(accounts)),
-        )
+            name = row["name"] or ""
+            phone = row["phone"] or ""
+            accounts = [normalize_account(a) for a in json.loads(row["accounts_json"] or "[]")]
+    if not name:
+        name = os.environ.get("OWNER_NAME") or "Wipiii"
+    return {"name": name, "phone": phone, "accounts": accounts}
 
 
 def init_db() -> None:
@@ -172,7 +183,6 @@ def init_db() -> None:
 
 
 init_db()
-seed_settings()
 
 # ── Auth ──────────────────────────────────────────────────────────────────────
 
@@ -237,20 +247,7 @@ async def me(user: str = Depends(require_user)):
 
 @app.get("/settings")
 async def get_settings(user: str = Depends(require_user)):
-    return read_settings()
-
-
-@app.put("/settings")
-async def put_settings(request: Request, user: str = Depends(require_user)):
-    body = await request.json()
-    name = (body.get("name") or "").strip() or "Wipiii"
-    phone = (body.get("phone") or "").strip()
-    accounts = [normalize_account(a) for a in (body.get("accounts") or []) if (a.get("number") or "").strip()]
-    with get_db() as db:
-        db.execute(
-            "UPDATE settings SET name=?, phone=?, accounts_json=? WHERE id=1",
-            (name, phone, json.dumps(accounts)),
-        )
+    """Read-only: the owner profile is managed in Wipiii Hub (project App Config)."""
     return read_settings()
 
 

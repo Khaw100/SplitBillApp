@@ -4,7 +4,9 @@ import { useEffect, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { api, fmtDate, fmtRp } from "@/lib/api";
-import { ChevronRight, EmptyState, Logo, Logout, Plus, Receipt, Settings } from "@/lib/ui";
+import { ChevronRight, EmptyState, Logo, Logout, Plus, Receipt } from "@/lib/ui";
+import { SpotlightCard } from "@/components/spotlight-card";
+import { NumberTicker } from "@/components/number-ticker";
 
 export default function Dashboard() {
   const router = useRouter();
@@ -24,42 +26,51 @@ export default function Dashboard() {
   };
 
   const total = bills.reduce((s, b) => s + (b.total || 0), 0);
-  const thisMonth = bills.filter((b) =>
-    String(b.created_at).slice(0, 7) === new Date().toISOString().slice(0, 7)
+  const thisMonth = bills.filter(
+    (b) => String(b.created_at).slice(0, 7) === new Date().toISOString().slice(0, 7)
   ).length;
 
   return (
     <main className="page">
       <header className="topbar">
         <Logo />
-        <div className="flex items-center gap-2">
-          <Link href="/settings" className="icon-btn" aria-label="Pengaturan">
-            <Settings size={17} />
-          </Link>
-          <button onClick={logout} className="icon-btn" aria-label="Keluar">
-            <Logout size={17} />
-          </button>
-        </div>
+        <button onClick={logout} className="icon-btn" aria-label="Keluar">
+          <Logout size={17} />
+        </button>
       </header>
 
-      <section className="pt-2 pb-6">
-        <p className="label">Total tagihan</p>
-        <p className="money-xl mt-2">{fmtRp(total)}</p>
-        <p className="mt-2 text-xs text-zinc-500">
-          {bills.length} bill tercatat{thisMonth ? ` · ${thisMonth} bulan ini` : ""}
-        </p>
-      </section>
+      <SpotlightCard className="mb-3 p-5">
+        <div className="dot-grid mask-fade-b pointer-events-none absolute inset-0 opacity-80" />
+        <div
+          aria-hidden
+          className="pointer-events-none absolute -right-12 -top-16 h-44 w-44 rounded-full"
+          style={{
+            background: "radial-gradient(circle, rgba(59,130,246,0.24), transparent 68%)",
+            filter: "blur(4px)",
+          }}
+        />
+        <div className="relative z-[1]">
+          <div className="flex items-center justify-between">
+            <p className="label">Total tagihan</p>
+            <span className="tag">{bills.length} bill</span>
+          </div>
+          <NumberTicker value={total} format={fmtRp} className="money-xl mt-2 block" />
+          <p className="mt-2 text-xs text-zinc-500">
+            {bills.length === 0
+              ? "belum ada bill"
+              : `${bills.length} bill tercatat${thisMonth ? ` · ${thisMonth} bulan ini` : ""}`}
+          </p>
+        </div>
+      </SpotlightCard>
 
-      <Link href="/new" className="btn btn-primary btn-block mb-8">
+      <Link href="/new" className="btn btn-primary btn-shine btn-block mb-8">
         <Plus size={18} />
         Split bill baru
       </Link>
 
       <div className="mb-2.5 flex items-baseline justify-between">
         <h2 className="label">Riwayat</h2>
-        {bills.length > 0 && (
-          <span className="text-[11px] text-zinc-600">{bills.length} bill</span>
-        )}
+        {bills.length > 0 && <span className="text-[11px] text-zinc-600">{bills.length} bill</span>}
       </div>
 
       {loading ? (
