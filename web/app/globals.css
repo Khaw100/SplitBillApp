@@ -49,6 +49,13 @@ textarea {
   margin: 0 auto;
   padding: 1rem 1rem calc(1.5rem + env(safe-area-inset-bottom));
 }
+/* Phones with "Desktop site" switched on report a ~980px viewport; without this
+   the 34rem column becomes a narrow strip in the middle of the screen. */
+@media (min-width: 640px) and (max-width: 1023px) {
+  .page {
+    max-width: 44rem;
+  }
+}
 .page-bar {
   padding-bottom: calc(9rem + env(safe-area-inset-bottom));
 }
@@ -342,6 +349,11 @@ textarea.input {
   max-width: 34rem;
   margin: 0 auto;
   padding: 0.75rem 1rem calc(0.75rem + env(safe-area-inset-bottom));
+}
+@media (min-width: 640px) and (max-width: 1023px) {
+  .bottom-bar-inner {
+    max-width: 44rem;
+  }
 }
 
 /* ── Misc ───────────────────────────────────────────────────────────────── */
