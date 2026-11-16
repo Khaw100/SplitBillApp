@@ -10,6 +10,7 @@ bank details are only exposed on pay pages when the host *is* the owner.
 
 import base64
 import json
+import math
 import os
 import sqlite3
 import uuid
@@ -293,6 +294,8 @@ Return STRICT JSON only, no markdown fences:
 }
 Rules:
 - price/subtotal/total are integers in smallest displayed unit (no decimals for Rp)
+- price is the UNIT price (price for 1 qty). If the receipt only prints the line
+  total for a qty > 1 line, divide it by qty.
 - qty = pack quantity if item sold per-pack
 - If not a receipt at all: {"is_receipt": false}
 - Copy item names as printed (keep original language)
@@ -302,7 +305,7 @@ Rules:
 - Do NOT include payment/tender lines as items: skip KEMBALI / CHANGE / TUNAI / CASH /
   BAYAR / DEBIT / CREDIT / QRIS / E-WALLET, and tax (PPN/DPP) summary lines.
 - One item per printed product line. Do not rename, split, or combine lines.
-- CHECK YOUR MATH: sum(item.price) must equal subtotal. If it does not, you misread a
+- CHECK YOUR MATH: sum(item.price * item.qty) must equal subtotal. If it does not, you misread a
   line — re-read the price column before answering.
 - tax_service_others = tax + service + other fees added on top of subtotal (0 if none).
 """
@@ -384,6 +387,7 @@ def _host_of(d: dict) -> dict:
 @app.post("/bills")
 async def create_bill(request: Request, user: str = Depends(require_user)):
     body = await request.json()
+    validate_bill_body(body)
     s = read_settings()
     host_is_owner = bool(body.get("host_is_owner", True))
     host_name = (body.get("host_name") or "").strip() or (s["name"] if host_is_owner else "")
@@ -399,13 +403,32 @@ async def create_bill(request: Request, user: str = Depends(require_user)):
                 json.dumps(body["items"]),
                 float(body.get("subtotal") or 0),
                 float(body.get("total") or 0),
-                json.dumps(body["assignments"]),
+                json.dumps(body.get("assignments") or {}),
                 json.dumps(body["participants"]),
                 host_name,
                 1 if host_is_owner else 0,
             ),
         )
     return {"id": bill_id}
+
+
+def validate_bill_body(body: dict) -> None:
+    items = body.get("items")
+    participants = body.get("participants")
+    if not isinstance(items, list) or not items:
+        raise HTTPException(status_code=422, detail="Bill needs at least one item")
+    if not all(isinstance(i, dict) and isinstance(i.get("id"), str) for i in items):
+        raise HTTPException(status_code=422, detail="Invalid items")
+    if not isinstance(participants, list) or not participants:
+        raise HTTPException(status_code=422, detail="Bill needs at least one participant")
+    if not isinstance(body.get("assignments", {}), dict):
+        raise HTTPException(status_code=422, detail="Invalid assignments")
+    try:
+        total = float(body.get("total") or 0)
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=422, detail="Invalid total")
+    if total <= 0:
+        raise HTTPException(status_code=422, detail="Total must be greater than 0")
 
 
 @app.get("/bills/{bill_id}")
@@ -508,12 +531,12 @@ def _split_result(snap: dict) -> list[dict]:
     items on edited receipts), so the parts always add up to the bill total.
     """
     items_by_id = {i["id"]: i for i in snap["items"]}
+    assignments = {name: list(dict.fromkeys(ids)) for name, ids in snap["assignments"].items()}
     share_count = {
-        iid: sum(1 for ids in snap["assignments"].values() if iid in ids)
-        for iid in items_by_id
+        iid: sum(1 for ids in assignments.values() if iid in ids) for iid in items_by_id
     }
     raw: list[dict] = []
-    for name, item_ids in snap["assignments"].items():
+    for name, item_ids in assignments.items():
         lines, sub = [], 0.0
         for iid in item_ids:
             it = items_by_id.get(iid)
@@ -523,17 +546,22 @@ def _split_result(snap: dict) -> list[dict]:
             line_total = it["price"] * it["qty"] / sc
             sub += line_total
             lines.append({**it, "line_total": round(line_total), "shared_by": sc})
-        raw.append({"name": name, "lines": lines, "subtotal": round(sub)})
+        raw.append({"name": name, "lines": lines, "exact": sub, "subtotal": round(sub)})
 
-    assigned_total = sum(p["subtotal"] for p in raw)
-    extra = float(snap["total"]) - assigned_total
-    result = []
-    for p in raw:
-        share = (p["subtotal"] / assigned_total) if assigned_total else 0
-        fee = round(extra * share)
-        total = p["subtotal"] + fee
-        result.append({**p, "total": total, "others": fee})
-    return result
+    # Largest-remainder rounding so the per-person totals add up to the bill
+    # total exactly (plain round() can drift by a few rupiah).
+    assigned = sum(p["exact"] for p in raw)
+    grand = round(float(snap["total"]))
+    exact = [p["exact"] / assigned * grand if assigned else 0.0 for p in raw]
+    totals = [math.floor(x) for x in exact]
+    leftover = grand - sum(totals)
+    for i in sorted(range(len(raw)), key=lambda i: exact[i] - totals[i], reverse=True)[: max(0, leftover)]:
+        totals[i] += 1
+    return [
+        {"name": p["name"], "lines": p["lines"], "subtotal": p["subtotal"],
+         "total": totals[i], "others": totals[i] - p["subtotal"]}
+        for i, p in enumerate(raw)
+    ]
 
 
 def _claims_for(bill_id: str) -> dict[str, dict[str, int]]:
@@ -548,7 +576,16 @@ def _claims_for(bill_id: str) -> dict[str, dict[str, int]]:
             raw = json.loads(r["items_json"] or "{}")
         except json.JSONDecodeError:
             raw = {}
-        out[r["participant"]] = {k: int(v) for k, v in raw.items() if int(v) > 0}
+        picked = {}
+        for k, v in raw.items():
+            try:
+                if int(v) > 0:
+                    picked[k] = int(v)
+            except (TypeError, ValueError):
+                continue
+        # An empty checklist means "hasn't picked yet", not "picked nothing".
+        if picked:
+            out[r["participant"]] = picked
     return out
 
 
@@ -611,6 +648,14 @@ async def share_bill(bill_id: str, user: str = Depends(require_user)):
     if not row:
         raise HTTPException(status_code=404, detail="Bill not found")
     snapshot = _bill_snapshot(dict(row))
+    with get_db() as db:
+        # Bills are immutable: reuse the existing view link instead of piling up rows.
+        existing = db.execute(
+            "SELECT id FROM shares WHERE bill_id=? AND kind='view' ORDER BY created_at DESC LIMIT 1",
+            (bill_id,),
+        ).fetchone()
+    if existing:
+        return {"share_id": existing["id"]}
     share_id = uuid.uuid4().hex[:10]
     with get_db() as db:
         db.execute(
@@ -744,7 +789,10 @@ def _clean_claim(snap: dict, chosen: list[dict]) -> dict[str, int]:
         iid = c.get("id")
         if not isinstance(iid, str) or iid not in valid:
             continue
-        qty = int(c.get("qty", 0))
+        try:
+            qty = int(c.get("qty", 0))
+        except (TypeError, ValueError):
+            continue
         cap = max(1, int(valid[iid]["qty"]))
         if qty > 0:
             out[iid] = min(qty, cap)

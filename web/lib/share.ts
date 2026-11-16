@@ -1,5 +1,7 @@
 import { fmtRp } from "./api";
 
+export { copyText } from "./api";
+
 export type Host = {
   name: string;
   is_owner: boolean;
@@ -11,14 +13,14 @@ export type Host = {
 export function hostBlock(host?: Host | null): string[] {
   if (!host) return [];
   if (!host.is_owner) {
-    return ["", `Bayar langsung ke ${host.name} ya (transfer atau tunai ke dia).`];
+    return ["", `Please pay ${host.name} directly (transfer or cash).`];
   }
-  const rows: string[] = ["", `Transfer ke ${host.name}:`];
+  const rows: string[] = ["", `Transfer to ${host.name}:`];
   for (const a of host.accounts || []) {
-    rows.push(`• ${a.label} ${a.number}${a.holder ? ` a/n ${a.holder}` : ""}`);
+    rows.push(`• ${a.label} ${a.number}${a.holder ? ` (${a.holder})` : ""}`);
   }
-  if (host.phone) rows.push(`• Hubungi/WA: ${host.phone}`);
-  if (rows.length === 2) rows.push("• (info rekening belum diisi)");
+  if (host.phone) rows.push(`• Phone/WhatsApp: ${host.phone}`);
+  if (rows.length === 2) rows.push("• (no payment details added yet)");
   return rows;
 }
 
@@ -35,14 +37,13 @@ export function payMessage({
   host?: Host | null;
   url: string;
 }) {
-  type Row = string;
-  const rows: Row[] = [`Halo ${participant}! Ini split bill ${title}.`, ""];
+  const rows: string[] = [`Hi ${participant}! Here's the split for ${title}.`, ""];
   if (typeof total === "number" && total > 0) {
-    rows.push(`Bagian kamu: ${fmtRp(total)}`);
+    rows.push(`Your share: ${fmtRp(total)}`);
   } else {
-    rows.push("Centang item yang kamu makan di link bawah ya, nanti totalnya muncul sendiri.");
+    rows.push("Tick what you had using the link below, your total will show up automatically.");
   }
-  rows.push(...hostBlock(host), "", `Rincian: ${url}`, "", "Makasih ya!");
+  rows.push(...hostBlock(host), "", `Details: ${url}`, "", "Thanks!");
   return rows.join("\n");
 }
 
@@ -60,33 +61,16 @@ export function generalMessage({
   url: string;
 }) {
   return [
-    `Split bill ${title}`,
-    `Total ${fmtRp(total)} · ${people.length} orang`,
+    `Split bill: ${title}`,
+    `Total ${fmtRp(total)} · ${people.length} ${people.length === 1 ? "person" : "people"}`,
     "",
     ...people.map((p) => `• ${p.name}: ${fmtRp(p.total)}`),
     ...hostBlock(host),
     "",
-    `Rincian: ${url}`,
+    `Details: ${url}`,
   ].join("\n");
 }
 
 export function waLink(text: string) {
   return `https://wa.me/?text=${encodeURIComponent(text)}`;
-}
-
-export async function copyText(text: string) {
-  try {
-    await navigator.clipboard.writeText(text);
-    return true;
-  } catch {
-    const el = document.createElement("textarea");
-    el.value = text;
-    el.style.position = "fixed";
-    el.style.opacity = "0";
-    document.body.appendChild(el);
-    el.select();
-    const ok = document.execCommand("copy");
-    document.body.removeChild(el);
-    return ok;
-  }
 }

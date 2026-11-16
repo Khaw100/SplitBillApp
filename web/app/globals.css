@@ -463,3 +463,43 @@ textarea.input {
   inset: 0;
   background: no-repeat center/12px url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='white' stroke-width='3.5' stroke-linecap='round' stroke-linejoin='round'><polyline points='20 6 9 17 4 12'/></svg>");
 }
+
+/* ── Desktop layouts ────────────────────────────────────────────────────────
+   Pages are mobile-first (single 34rem column + fixed bottom bar). From lg up
+   a page can opt into a wide two-column layout with `.page-wide`; the bottom
+   bar then becomes a normal block inside the sidebar instead of a fixed bar. */
+.side-sticky {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+@media (min-width: 1024px) {
+  .page-wide {
+    max-width: 72rem;
+    padding: 2rem 2rem 3rem;
+  }
+  .page-wide.page-bar {
+    padding-bottom: 3rem;
+  }
+  .page-wide .topbar {
+    padding-bottom: 1.5rem;
+  }
+  .page-wide .topbar-title {
+    font-size: 1.375rem;
+  }
+  .page-wide .bottom-bar {
+    position: static;
+    background: none;
+    border: 0;
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
+  }
+  .page-wide .bottom-bar-inner {
+    max-width: none;
+    padding: 0;
+  }
+  .side-sticky {
+    position: sticky;
+    top: 1.5rem;
+  }
+}
