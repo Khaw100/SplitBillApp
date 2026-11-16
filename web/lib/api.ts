@@ -16,3 +16,14 @@ export async function api(path: string, opts: RequestInit = {}) {
 export function fmtRp(n: number) {
   return "Rp " + Math.round(n).toLocaleString("id-ID");
 }
+
+const MONTHS = ["Jan", "Feb", "Mar", "Apr", "Mei", "Jun", "Jul", "Agu", "Sep", "Okt", "Nov", "Des"];
+
+/** "2026-08-24 13:37" -> "24 Agu · 13:37" */
+export function fmtDate(raw: string) {
+  const s = String(raw || "");
+  const m = s.match(/(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2})/);
+  if (!m) return s.slice(0, 10);
+  const [, , mo, d, hh, mm] = m;
+  return `${Number(d)} ${MONTHS[Number(mo) - 1]} · ${hh}:${mm}`;
+}

@@ -1,60 +1,126 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { useParams } from "next/navigation";
-import { api, fmtRp } from "@/lib/api";
+import Link from "next/link";
+import { useParams, useRouter } from "next/navigation";
+import { api, fmtDate, fmtRp } from "@/lib/api";
+import { copyText, generalMessage, payMessage, waLink } from "@/lib/share";
+import {
+  AppHeader,
+  Avatar,
+  Check,
+  Copy,
+  Download,
+  Share,
+  Spinner,
+  Trash,
+  WhatsApp,
+} from "@/lib/ui";
 
 export default function BillReport() {
   const { id } = useParams<{ id: string }>();
+  const router = useRouter();
   const [bill, setBill] = useState<any>(null);
   const [result, setResult] = useState<any[] | null>(null);
-  const [shareUrl, setShareUrl] = useState<string | null>(null);
+  const [status, setStatus] = useState<Record<string, any>>({});
+  const [links, setLinks] = useState<Record<string, string>>({});
   const [copied, setCopied] = useState<string | null>(null);
+  const [shareUrl, setShareUrl] = useState<string | null>(null);
+  const [busyShare, setBusyShare] = useState(false);
+  const [confirmDelete, setConfirmDelete] = useState(false);
 
-  // fetch bill, then compute result via a temp share (server-side math)
   useEffect(() => {
     if (!id) return;
     api(`/bills/${id}`).then(async (b) => {
       setBill(b);
-      const s = await api(`/bills/${id}/share`, { method: "POST" });
-      const snap = await fetch(`/api/share/${s.share_id}`).then((r) => r.json());
-      setResult(snap.result);
+      api(`/bills/${id}/result`)
+        .then((r) => setResult(r.result))
+        .catch(() => {});
+      api(`/bills/${id}/status`)
+        .then((s: any) => {
+          const map: Record<string, any> = {};
+          for (const p of s.participants || []) map[p.name] = p.paid;
+          setStatus(map);
+        })
+        .catch(() => {});
+      // pay links are idempotent server-side
+      const entries = await Promise.all(
+        (b.participants as string[]).map(async (p) => {
+          try {
+            const r = await api(`/bills/${id}/paylink/${encodeURIComponent(p)}`, {
+              method: "POST",
+            });
+            return [p, `${location.origin}${r.url}`] as const;
+          } catch {
+            return [p, ""] as const;
+          }
+        })
+      );
+      setLinks(Object.fromEntries(entries.filter(([, u]) => u)));
     });
   }, [id]);
 
-  if (!bill) {
-    return <main className="min-h-screen flex items-center justify-center text-sm text-zinc-500">Loading…</main>;
-  }
+  if (!bill)
+    return (
+      <main className="page flex min-h-[60dvh] items-center justify-center">
+        <Spinner size={20} />
+      </main>
+    );
 
-  const itemsById = Object.fromEntries(bill.items.map((i: any) => [i.id, i]));
+  const host = bill.host;
   const grand = bill.total;
-  const perPerson = grand / Math.max(1, (result || bill.participants).length);
+  const people = result || [];
+  const paidTotal = Object.values(status).reduce((s: number, p: any) => s + (p?.total || 0), 0);
+  const perPerson = people.length ? grand / people.length : 0;
+  const date = fmtDate(bill.created_at);
 
-  const buildText = () => {
-    const lines: string[] = [`💵 ${bill.title} — SPLIT RESULT`, ""];
-    for (const p of result || []) {
-      lines.push(`👤 ${p.name} — total ${fmtRp(p.total)}`);
-      for (const l of p.lines) {
-        const shared = l.shared_by > 1 ? ` (split ${l.shared_by}x)` : "";
-        lines.push(`   • ${l.name} ${l.qty}× : ${fmtRp(l.line_total)}${shared}`);
-      }
-      lines.push(`   subtotal ${fmtRp(p.subtotal)} + others* ${fmtRp(p.others)}`);
-      lines.push("");
-    }
-    lines.push("TOTAL: " + fmtRp(grand));
-    lines.push("*tax/service/discount");
-    return lines.join("\n");
+  const flash = (tag: string) => {
+    setCopied(tag);
+    setTimeout(() => setCopied(null), 1600);
   };
 
-  const copy = async (text: string, tag: string) => {
-    await navigator.clipboard.writeText(text);
-    setCopied(tag);
-    setTimeout(() => setCopied(null), 1500);
+  const copyPay = async (name: string) => {
+    const row = people.find((p) => p.name === name);
+    const url = links[name] || `${location.origin}/`;
+    await copyText(
+      payMessage({
+        title: bill.title,
+        participant: name,
+        total: row?.total ?? 0,
+        host,
+        url,
+      })
+    );
+    flash(`pay-${name}`);
+  };
+
+  const copyGeneral = async () => {
+    setBusyShare(true);
+    try {
+      let url = shareUrl;
+      if (!url) {
+        const s = await api(`/bills/${id}/share`, { method: "POST" });
+        url = `${location.origin}/s/${s.share_id}`;
+        setShareUrl(url);
+      }
+      await copyText(
+        generalMessage({
+          title: bill.title,
+          total: grand,
+          people: people.map((p) => ({ name: p.name, total: p.total })),
+          host,
+          url,
+        })
+      );
+      flash("general");
+    } finally {
+      setBusyShare(false);
+    }
   };
 
   const downloadCsv = () => {
-    const rows = ["participant,item,qty,price_per_unit,line_total"];
-    for (const p of result || [])
+    const rows = ["peserta,item,qty,harga_satuan,subtotal"];
+    for (const p of people)
       for (const l of p.lines)
         rows.push(`"${p.name}","${l.name}",${l.qty},${l.price},${l.line_total}`);
     const blob = new Blob([rows.join("\n")], { type: "text/csv" });
@@ -64,91 +130,236 @@ export default function BillReport() {
     a.click();
   };
 
-  const makeShare = async () => {
-    const s = await api(`/bills/${id}/share`, { method: "POST" });
-    setShareUrl(`${location.origin}/s/${s.share_id}`);
+  const remove = async () => {
+    await api(`/bills/${id}`, { method: "DELETE" });
+    router.replace("/");
   };
 
   return (
-    <main className="min-h-screen max-w-2xl mx-auto px-4 py-10">
-      <header className="flex items-center justify-between mb-6">
-        <div>
-          <h1 className="text-xl font-bold text-zinc-100">{bill.title}</h1>
-          <p className="text-xs text-zinc-500 mt-0.5">Split report</p>
-        </div>
-        <a href="/" className="text-xs text-zinc-500 hover:text-zinc-300 border border-zinc-800 rounded-lg px-3 py-1.5">
-          ← Bills
-        </a>
-      </header>
+    <main className="page page-bar">
+      <AppHeader
+        title={bill.title}
+        subtitle={`${date} · ${bill.participants.length} orang`}
+        back="/"
+        right={
+          <button onClick={copyGeneral} className="icon-btn" aria-label="Bagikan hasil" disabled={busyShare}>
+            {copied === "general" ? <Check size={17} /> : <Share size={17} />}
+          </button>
+        }
+      />
 
-      {/* Summary cards */}
-      <div className="grid grid-cols-3 gap-3 mb-8">
-        <Card label="People" value={String((result || bill.participants).length)} />
-        <Card label="Grand total" value={fmtRp(grand)} accent />
-        <Card label="Per person" value={fmtRp(perPerson)} />
-      </div>
-
-      {/* Export bar */}
-      <div className="flex gap-2 mb-8">
-        <button onClick={() => copy(buildText(), "copy")} className="flex-1 text-xs bg-zinc-900 hover:bg-zinc-800 border border-zinc-800 rounded-lg py-2.5 font-medium text-zinc-300 transition-colors">
-          {copied === "copy" ? "✓ Copied!" : "📋 Copy result"}
-        </button>
-        <button onClick={downloadCsv} className="flex-1 text-xs bg-zinc-900 hover:bg-zinc-800 border border-zinc-800 rounded-lg py-2.5 font-medium text-zinc-300 transition-colors">
-          ⬇️ CSV
-        </button>
-        <button onClick={makeShare} className="flex-1 text-xs bg-blue-600 hover:bg-blue-500 rounded-lg py-2.5 font-semibold text-white transition-colors">
-          🔗 Share link
-        </button>
-      </div>
-
-      {shareUrl && (
-        <div
-          onClick={() => copy(shareUrl, "url")}
-          className="cursor-pointer bg-blue-950/30 border border-blue-900 rounded-xl px-4 py-3 mb-8 text-xs text-blue-300 truncate"
-          title="Click to copy"
-        >
-          {copied === "url" ? "✓ Link copied — send it to your friends!" : shareUrl}
-        </div>
-      )}
-
-      {/* Per-participant breakdown */}
-      <div className="space-y-4">
-        {(result || []).map((p) => (
-          <div key={p.name} className="bg-zinc-900 border border-zinc-800 rounded-2xl p-4">
-            <div className="flex items-center justify-between mb-3 pb-3 border-b border-zinc-800">
-              <h2 className="text-sm font-semibold text-zinc-200">{p.name}</h2>
-              <p className="text-sm"><span className="text-zinc-500 text-xs mr-2">TOTAL</span>
-                <span className="font-bold text-blue-400">{fmtRp(p.total)}</span></p>
-            </div>
-            <table className="w-full text-sm">
-              <tbody>
-                {p.lines.map((l: any, i: number) => (
-                  <tr key={i} className="border-b border-zinc-800/50 last:border-0">
-                    <td className="py-2 text-zinc-300">{l.name}{l.shared_by > 1 &&
-                      <span className="ml-2 text-[10px] uppercase tracking-wider text-amber-400/80">÷{l.shared_by}</span>}
-                    </td>
-                    <td className="py-2 text-right text-zinc-500">{l.qty}×</td>
-                    <td className="py-2 text-right text-zinc-400">{fmtRp(l.line_total)}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-            <p className="text-xs text-zinc-600 mt-2">
-              subtotal {fmtRp(p.subtotal)} · others* {fmtRp(p.others)}
+      {/* Host */}
+      <section className="card mb-3 p-4">
+        <div className="flex items-center gap-3">
+          <Avatar name={host?.name || "?"} size={34} />
+          <div className="min-w-0 flex-1">
+            <p className="flex items-center gap-2 text-sm font-medium text-zinc-100">
+              <span className="truncate">{host?.name}</span>
+              {host?.is_owner && <span className="tag tag-accent">kamu</span>}
+            </p>
+            <p className="mt-0.5 text-[11px] text-zinc-500">
+              {host?.is_owner
+                ? "rekening & nomor kamu dilampirkan di pesan pembayaran"
+                : "host lain · info rekening tidak dibagikan"}
             </p>
           </div>
-        ))}
-      </div>
-      <p className="text-xs text-zinc-700 mt-4">*tax, service, discount etc.</p>
-    </main>
-  );
-}
+        </div>
 
-function Card({ label, value, accent }: { label: string; value: string; accent?: boolean }) {
-  return (
-    <div className={`rounded-2xl border p-4 ${accent ? "bg-blue-950/20 border-blue-900/60" : "bg-zinc-900 border-zinc-800"}`}>
-      <p className="text-[10px] uppercase tracking-widest text-zinc-500 font-semibold mb-1">{label}</p>
-      <p className={`font-bold ${accent ? "text-blue-400" : "text-zinc-100"}`}>{value}</p>
-    </div>
+        {host?.is_owner && (host.accounts?.length > 0 || host.phone) && (
+          <div className="mt-3 space-y-1.5 border-t border-[var(--line)] pt-3">
+            {(host.accounts || []).map((a: any) => (
+              <div key={a.label + a.number} className="flex items-center justify-between gap-2">
+                <p className="text-[13px] text-zinc-300">
+                  <span className="text-zinc-500">{a.label}</span>{" "}
+                  <span className="num">{a.number}</span>
+                  {a.holder && <span className="text-zinc-600"> · {a.holder}</span>}
+                </p>
+                <button
+                  onClick={async () => {
+                    await copyText(a.number);
+                    flash(`acc-${a.number}`);
+                  }}
+                  className="text-zinc-500 transition-colors hover:text-zinc-200"
+                  aria-label="Salin nomor"
+                >
+                  {copied === `acc-${a.number}` ? <Check size={15} /> : <Copy size={15} />}
+                </button>
+              </div>
+            ))}
+            {host.phone && (
+              <div className="flex items-center justify-between gap-2">
+                <p className="text-[13px] text-zinc-300">
+                  <span className="text-zinc-500">WA</span> <span className="num">{host.phone}</span>
+                </p>
+                <button
+                  onClick={async () => {
+                    await copyText(host.phone);
+                    flash("phone");
+                  }}
+                  className="text-zinc-500 transition-colors hover:text-zinc-200"
+                  aria-label="Salin nomor HP"
+                >
+                  {copied === "phone" ? <Check size={15} /> : <Copy size={15} />}
+                </button>
+              </div>
+            )}
+          </div>
+        )}
+        {host?.is_owner && host.accounts?.length === 0 && !host.phone && (
+          <p className="mt-3 border-t border-[var(--line)] pt-3 text-[11px] text-amber-400/90">
+            Rekening belum diisi.{" "}
+            <Link href="/settings" className="link">Lengkapi di pengaturan</Link> biar temanmu tahu
+            harus transfer ke mana.
+          </p>
+        )}
+      </section>
+
+      {/* Totals */}
+      <section className="mb-5 grid grid-cols-3 gap-2">
+        <div className="card px-3 py-2.5">
+          <p className="label">Total</p>
+          <p className="num mt-1 text-[15px] font-semibold">{fmtRp(grand)}</p>
+        </div>
+        <div className="card px-3 py-2.5">
+          <p className="label">Peserta</p>
+          <p className="num mt-1 text-[15px] font-semibold">
+            {people.length}
+            <span className="ml-1 text-[11px] font-normal text-zinc-500">orang</span>
+          </p>
+        </div>
+        <div className="card px-3 py-2.5">
+          <p className="label">Masuk</p>
+          <p
+            className={`num mt-1 text-[15px] font-semibold ${
+              paidTotal > 0 ? "text-emerald-400" : "text-zinc-400"
+            }`}
+          >
+            {fmtRp(paidTotal)}
+          </p>
+        </div>
+      </section>
+
+      {/* Participants */}
+      <div className="mb-2 flex items-baseline justify-between">
+        <h2 className="label">Pembagian</h2>
+        <span className="text-[11px] text-zinc-600">{people.length} orang</span>
+      </div>
+
+      <ul className="space-y-2">
+        {people.length === 0 && (
+          <li className="card px-6 py-8 text-center text-[13px] text-zinc-500">
+            Belum ada peserta di bill ini.
+          </li>
+        )}
+        {people.map((p) => {
+          const paid = status[p.name];
+          return (
+            <li key={p.name} className="card overflow-hidden">
+              <div className="flex items-center gap-3 px-4 py-3">
+                <Avatar name={p.name} />
+                <div className="min-w-0 flex-1">
+                  <p className="flex items-center gap-2 text-sm font-medium text-zinc-100">
+                    <span className="truncate">{p.name}</span>
+                    {paid ? (
+                      <span className="tag tag-ok">lunas</span>
+                    ) : (
+                      <span className="tag" style={{ color: "#a1a1aa" }}>belum</span>
+                    )}
+                  </p>
+                  <p className="mt-0.5 text-[11px] text-zinc-500">
+                    {p.lines.length} item{p.others > 0 ? ` · termasuk pajak ${fmtRp(p.others)}` : ""}
+                  </p>
+                </div>
+                <p className="num shrink-0 text-[15px] font-semibold text-zinc-100">
+                  {fmtRp(p.total)}
+                </p>
+              </div>
+
+              <div className="flex items-center gap-2 border-t border-[var(--line)] px-3 py-2">
+                <button onClick={() => copyPay(p.name)} className="btn btn-secondary btn-sm flex-1">
+                  {copied === `pay-${p.name}` ? (
+                    <>
+                      <Check size={14} /> Pesan disalin
+                    </>
+                  ) : (
+                    <>
+                      <Copy size={14} /> Salin pesan
+                    </>
+                  )}
+                </button>
+                {links[p.name] && (
+                  <a
+                    href={waLink(
+                      payMessage({
+                        title: bill.title,
+                        participant: p.name,
+                        total: p.total,
+                        host,
+                        url: links[p.name],
+                      })
+                    )}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="btn btn-ghost btn-sm !px-2.5"
+                    aria-label="Kirim WhatsApp"
+                  >
+                    <WhatsApp size={15} />
+                  </a>
+                )}
+              </div>
+
+              <details className="border-t border-[var(--line)]">
+                <summary className="cursor-pointer px-4 py-2 text-[11px] text-zinc-500 hover:text-zinc-300">
+                  Lihat rincian item
+                </summary>
+                <div className="px-4 pb-3">
+                  {p.lines.map((l: any, i: number) => (
+                    <div key={i} className="flex items-baseline justify-between gap-3 py-1">
+                      <p className="min-w-0 flex-1 truncate text-[13px] text-zinc-400">
+                        {l.name}
+                        {l.shared_by > 1 && <span className="ml-1.5 text-[10px] text-zinc-600">÷{l.shared_by}</span>}
+                      </p>
+                      <p className="num text-[12px] text-zinc-500">{fmtRp(l.line_total)}</p>
+                    </div>
+                  ))}
+                  <div className="mt-2 flex items-baseline justify-between border-t border-[var(--line)] pt-2">
+                    <p className="text-[12px] text-zinc-500">Item {fmtRp(p.subtotal)}</p>
+                    <p className="text-[12px] text-zinc-500">Pajak/lainnya {fmtRp(p.others)}</p>
+                  </div>
+                </div>
+              </details>
+            </li>
+          );
+        })}
+      </ul>
+
+      {/* Actions */}
+      <section className="mt-6 space-y-2">
+        <div className="flex gap-2">
+          <button onClick={downloadCsv} className="btn btn-secondary btn-block">
+            <Download size={15} /> CSV
+          </button>
+          <button
+            onClick={() => (confirmDelete ? remove() : setConfirmDelete(true))}
+            className="btn btn-ghost btn-block"
+          >
+            <Trash size={15} /> {confirmDelete ? "Yakin hapus?" : "Hapus"}
+          </button>
+        </div>
+      </section>
+
+      <p className="mt-6 text-center text-[11px] leading-relaxed text-zinc-500">
+        Link pembayaran tiap orang bisa dibuka tanpa login, jadi aman dikirim lewat WhatsApp.
+      </p>
+
+      <div className="bottom-bar">
+        <div className="bottom-bar-inner">
+          <button onClick={copyGeneral} disabled={busyShare} className="btn btn-primary btn-block">
+            {copied === "general" ? <Check size={16} /> : <Share size={16} />}
+            {copied === "general" ? "Ringkasan disalin" : "Salin ringkasan + link"}
+          </button>
+        </div>
+      </div>
+    </main>
   );
 }

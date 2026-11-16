@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
+import { Logo, Spinner } from "@/lib/ui";
 
 export default function LoginPage() {
   const router = useRouter();
@@ -23,63 +24,70 @@ export default function LoginPage() {
       });
       if (!res.ok) {
         const d = await res.json().catch(() => ({}));
-        throw new Error(d.detail || "Login failed");
+        throw new Error(d.detail || "Gagal masuk");
       }
-      router.push("/");
+      router.replace("/");
     } catch (err: any) {
-      setError(err.message || "Login failed");
-    } finally {
+      setError(err.message || "Gagal masuk");
       setBusy(false);
     }
   };
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-zinc-950 px-4">
-      <div className="w-full max-w-sm">
-        <div className="mb-8 text-center">
-          <h1 className="text-2xl font-bold text-zinc-100">SplitBillApp</h1>
-          <p className="text-sm text-zinc-500 mt-1">Split receipts with friends</p>
-        </div>
-        <form
-          onSubmit={handleLogin}
-          className="bg-zinc-900 border border-zinc-800 rounded-2xl p-6 space-y-4"
-        >
+    <main className="flex min-h-[100dvh] flex-col justify-center px-5">
+      <div className="mx-auto w-full max-w-[22rem]">
+        <div className="mb-8 flex flex-col items-start gap-6">
+          <Logo />
           <div>
-            <label className="text-xs text-zinc-400 uppercase tracking-widest">Username</label>
+            <h1 className="text-2xl font-semibold tracking-tight">Masuk dulu</h1>
+            <p className="mt-1 text-sm leading-relaxed text-zinc-500">
+              Aplikasi ini privat, cuma kamu yang bisa bikin split bill.
+            </p>
+          </div>
+        </div>
+
+        <form onSubmit={handleLogin} className="space-y-3">
+          <div className="space-y-1.5">
+            <label className="label" htmlFor="u">Nama pengguna</label>
             <input
+              id="u"
               value={username}
               onChange={(e) => setUsername(e.target.value)}
               autoComplete="username"
+              autoCapitalize="none"
               required
-              className="mt-1 w-full bg-zinc-950 border border-zinc-700 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-blue-500"
+              className="input"
             />
           </div>
-          <div>
-            <label className="text-xs text-zinc-400 uppercase tracking-widest">Password</label>
+          <div className="space-y-1.5">
+            <label className="label" htmlFor="p">Sandi</label>
             <input
+              id="p"
               type="password"
               value={password}
               onChange={(e) => setPassword(e.target.value)}
               autoComplete="current-password"
               required
-              className="mt-1 w-full bg-zinc-950 border border-zinc-700 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-blue-500"
+              className="input"
             />
           </div>
+
           {error && (
-            <p className="text-sm text-red-400 bg-red-950/40 border border-red-900 rounded-lg px-3 py-2">
+            <p className="rounded-xl border border-red-900/60 bg-red-950/30 px-3 py-2 text-[13px] text-red-300">
               {error}
             </p>
           )}
-          <button
-            type="submit"
-            disabled={busy}
-            className="w-full bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-white font-semibold rounded-lg py-2.5 text-sm transition-colors"
-          >
-            {busy ? "Signing in..." : "Sign in"}
+
+          <button type="submit" disabled={busy} className="btn btn-primary btn-block !mt-4">
+            {busy && <Spinner size={16} />}
+            {busy ? "Memeriksa…" : "Masuk"}
           </button>
         </form>
-        <p className="text-center text-xs text-zinc-600 mt-4">private · powered by Wipiii Hub</p>
+
+        <p className="mt-6 text-[11px] leading-relaxed text-zinc-600">
+          Link pembayaran bisa dibuka siapa pun yang punya link-nya, tanpa login.
+        </p>
       </div>
-    </div>
+    </main>
   );
 }

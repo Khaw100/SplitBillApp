@@ -2,20 +2,22 @@
 
 import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
+import { fmtRp } from "@/lib/api";
+import { AppHeader, Camera, Close, Plus, Spinner, Upload } from "@/lib/ui";
 
 export default function NewBill() {
   const router = useRouter();
   const videoRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const streamRef = useRef<MediaStream | null>(null);
+  const fileRef = useRef<HTMLInputElement>(null);
 
   const [preview, setPreview] = useState<string | null>(null);
   const [parsing, setParsing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [cameraOn, setCameraOn] = useState(false);
 
-  // parsed + editable
-  const [title, setTitle] = useState("Receipt");
+  const [title, setTitle] = useState("Struk");
   const [items, setItems] = useState<any[]>([]);
   const [subtotal, setSubtotal] = useState(0);
   const [total, setTotal] = useState(0);
@@ -43,11 +45,9 @@ export default function NewBill() {
       }, 50);
     } catch (err: any) {
       if (err.name === "NotAllowedError") {
-        setError("Camera permission denied. Please allow camera access in your browser.");
-      } else if (location.protocol !== "https:" && location.hostname !== "localhost") {
-        setError("Camera requires HTTPS. Open https://splitbill.rakhawiratama.com");
+        setError("Izin kamera ditolak. Kasih akses kamera di browser, atau pakai upload file.");
       } else {
-        setError("Camera unavailable: " + (err.message || err.name));
+        setError("Kamera tidak bisa dipakai: " + (err.message || err.name));
       }
     }
   };
@@ -87,7 +87,7 @@ export default function NewBill() {
       const res = await fetch("/api/parse", { method: "POST", body: fd, credentials: "include" });
       const d = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(d.detail || `HTTP ${res.status}`);
-      setTitle(d.title || "Receipt");
+      setTitle(d.title || "Struk");
       setItems(
         (d.items || []).map((it: any, i: number) => ({
           id: `it${i}`,
@@ -113,6 +113,7 @@ export default function NewBill() {
   const addItem = () =>
     setItems((prev) => [...prev, { id: `it${Date.now()}`, name: "", qty: 1, price: 0 }]);
 
+  const itemsSum = items.reduce((s, it) => s + (Number(it.price) || 0) * (Number(it.qty) || 1), 0);
   const canProceed = items.length > 0 && total > 0 && !parsing;
 
   const next = () => {
@@ -122,148 +123,203 @@ export default function NewBill() {
 
   if (cameraOn) {
     return (
-      <main className="min-h-screen bg-zinc-950 flex flex-col">
-        <video ref={videoRef} playsInline muted className="flex-1 w-full object-cover" />
-        <canvas ref={canvasRef} className="hidden" />
-        <div className="p-6 flex items-center justify-center gap-8 bg-zinc-950">
-          <button onClick={closeCamera} className="text-zinc-400 text-sm px-4 py-2 rounded-full bg-zinc-900 border border-zinc-800">
-            Cancel
+      <main className="flex min-h-[100dvh] flex-col bg-black">
+        <div className="relative flex-1">
+          <video ref={videoRef} playsInline muted className="h-full w-full object-cover" />
+          <button
+            onClick={closeCamera}
+            className="icon-btn absolute right-3 top-3 !h-10 !w-10 bg-black/60"
+            aria-label="Tutup kamera"
+          >
+            <Close size={18} />
           </button>
+          <div className="pointer-events-none absolute inset-5 rounded-2xl border border-white/25" />
+        </div>
+        <canvas ref={canvasRef} className="hidden" />
+        <div className="flex items-center justify-center gap-10 py-6">
+          <span className="w-16 text-center text-[11px] text-zinc-500">Struk<br />di dalam kotak</span>
           <button
             onClick={capture}
-            aria-label="Capture receipt"
-            className="w-16 h-16 rounded-full bg-blue-600 ring-4 ring-blue-600/30 active:scale-95 transition-transform"
+            aria-label="Ambil foto"
+            className="h-16 w-16 rounded-full bg-white active:scale-95"
           />
-          <div className="w-[76px]" />
+          <div className="w-16" />
         </div>
       </main>
     );
   }
 
   return (
-    <main className="min-h-screen max-w-2xl mx-auto px-4 py-10">
-      <header className="flex items-center justify-between mb-8">
-        <h1 className="text-xl font-bold text-zinc-100">New split</h1>
-        <a href="/" className="text-xs text-zinc-500 hover:text-zinc-300 border border-zinc-800 rounded-lg px-3 py-1.5">
-          Cancel
-        </a>
-      </header>
+    <main className="page page-bar">
+      <AppHeader title="Split baru" subtitle="foto atau upload struknya" back="/" />
 
       {!preview && !parsing && (
-        <div className="space-y-3">
+        <div className="space-y-2.5 fade-up">
           <button
             onClick={openCamera}
-            className="block w-full bg-zinc-900 hover:border-blue-500/60 border-2 border-dashed border-zinc-700 rounded-2xl p-10 text-center transition-colors"
+            className="card flex w-full items-center gap-3.5 px-4 py-4 text-left transition-colors hover:border-zinc-700"
           >
-            <p className="text-4xl mb-3">📷</p>
-            <p className="text-sm font-semibold text-zinc-200">Take a photo</p>
-            <p className="text-xs text-zinc-500 mt-1">point your camera at the receipt</p>
+            <span className="flex h-10 w-10 items-center justify-center rounded-xl bg-zinc-800 text-zinc-200">
+              <Camera size={19} />
+            </span>
+            <span className="flex-1">
+              <span className="block text-sm font-medium text-zinc-100">Ambil foto struk</span>
+              <span className="mt-0.5 block text-[11px] text-zinc-500">
+                Paling cepat, langsung dari kamera
+              </span>
+            </span>
+            <span className="text-zinc-600">›</span>
           </button>
-          <div className="flex items-center gap-3">
-            <div className="flex-1 h-px bg-zinc-800" />
-            <span className="text-xs text-zinc-600">or</span>
-            <div className="flex-1 h-px bg-zinc-800" />
-          </div>
-          <label className="block cursor-pointer bg-zinc-900 hover:border-zinc-600 border border-zinc-800 rounded-2xl p-6 text-center transition-colors">
-            <input
-              type="file"
-              accept="image/*"
-              className="hidden"
-              onChange={(e) => e.target.files?.[0] && handleUpload(e.target.files[0])}
-            />
-            <p className="text-sm font-medium text-zinc-300">📁 Upload from gallery / files</p>
-          </label>
+
+          <button
+            onClick={() => fileRef.current?.click()}
+            className="card flex w-full items-center gap-3.5 px-4 py-4 text-left transition-colors hover:border-zinc-700"
+          >
+            <span className="flex h-10 w-10 items-center justify-center rounded-xl bg-zinc-800 text-zinc-200">
+              <Upload size={19} />
+            </span>
+            <span className="flex-1">
+              <span className="block text-sm font-medium text-zinc-100">Upload dari galeri</span>
+              <span className="mt-0.5 block text-[11px] text-zinc-500">
+                Foto struk yang sudah kamu ambil
+              </span>
+            </span>
+            <span className="text-zinc-600">›</span>
+          </button>
+          <input
+            ref={fileRef}
+            type="file"
+            accept="image/*"
+            className="hidden"
+            onChange={(e) => e.target.files?.[0] && handleUpload(e.target.files[0])}
+          />
+
+          <p className="pt-3 text-[11px] leading-relaxed text-zinc-600">
+            AI membaca nama item, harga, pajak dan total. Setelah itu kamu bisa koreksi manual
+            sebelum dibagi ke teman.
+          </p>
         </div>
       )}
 
       {parsing && (
-        <div className="bg-zinc-900 border border-zinc-800 rounded-2xl p-8 text-center">
-          <div className="animate-pulse text-sm text-zinc-400">🤖 AI is reading your receipt...</div>
+        <div className="card flex flex-col items-center gap-3 px-6 py-12 fade-up">
+          <Spinner size={22} />
+          <p className="text-sm text-zinc-300">AI sedang membaca struk…</p>
+          <p className="text-[11px] text-zinc-500">biasanya 5–15 detik</p>
         </div>
       )}
 
       {error && (
-        <p className="text-sm text-red-400 bg-red-950/40 border border-red-900 rounded-lg px-4 py-3 mt-4">{error}</p>
+        <p className="mt-3 rounded-xl border border-red-900/60 bg-red-950/30 px-3.5 py-2.5 text-[13px] leading-relaxed text-red-300">
+          {error}
+        </p>
       )}
 
       {preview && !parsing && (
-        <div className="space-y-6">
-          <div className="bg-zinc-900 border border-zinc-800 rounded-2xl p-4 flex gap-4 items-start">
+        <div className="space-y-3 fade-up">
+          <div className="card flex items-center gap-3 p-3">
             {/* eslint-disable-next-line @next/next/no-img-element */}
-            <img src={preview} alt="receipt" className="h-28 rounded-lg object-cover" />
-            <div className="flex-1">
-              <label className="text-xs text-zinc-400 uppercase tracking-widest">Title</label>
+            <img src={preview} alt="struk" className="h-16 w-16 shrink-0 rounded-lg object-cover" />
+            <div className="min-w-0 flex-1">
+              <label className="label mb-1.5 block" htmlFor="title">Nama bill</label>
               <input
+                id="title"
                 value={title}
                 onChange={(e) => setTitle(e.target.value)}
-                className="mt-1 w-full bg-zinc-950 border border-zinc-700 rounded-lg px-3 py-2 text-sm"
+                className="input !h-10"
+                placeholder="misal: Makan malam Sate Taichan"
               />
             </div>
           </div>
 
-          <div className="bg-zinc-900 border border-zinc-800 rounded-2xl p-4">
-            <div className="flex items-center justify-between mb-3">
-              <h2 className="text-sm uppercase tracking-widest text-zinc-500 font-semibold">Items</h2>
-              <button onClick={addItem} className="text-xs text-blue-400 hover:text-blue-300">
-                + Add item
+          <div className="card overflow-hidden">
+            <div className="flex items-center justify-between px-4 pb-1 pt-3.5">
+              <h2 className="label">Item ({items.length})</h2>
+              <button onClick={addItem} className="flex items-center gap-1 text-[12px] font-medium text-blue-400">
+                <Plus size={13} /> Tambah
               </button>
             </div>
-            <div className="space-y-2">
-              {items.map((it) => (
-                <div key={it.id} className="flex gap-2 items-center">
+            {items.map((it) => (
+              <div key={it.id} className="border-t border-[var(--line)] px-4 py-3 first:border-t-0">
+                <div className="flex items-center gap-2">
                   <input
                     value={it.name}
                     onChange={(e) => updateItem(it.id, "name", e.target.value)}
-                    placeholder="Item name"
-                    className="flex-1 min-w-0 bg-zinc-950 border border-zinc-700 rounded-lg px-3 py-1.5 text-sm"
+                    placeholder="Nama item"
+                    className="min-w-0 flex-1 bg-transparent text-sm text-zinc-100 outline-none placeholder:text-zinc-600"
                   />
+                  <button
+                    onClick={() => removeItem(it.id)}
+                    className="text-zinc-600 transition-colors hover:text-red-400"
+                    aria-label="Hapus item"
+                  >
+                    <Close size={15} />
+                  </button>
+                </div>
+                <div className="mt-2 flex items-center gap-2 text-[11px] text-zinc-500">
+                  <span className="tag">{it.qty}×</span>
                   <input
-                    type="number" min={1}
+                    type="number"
+                    min={1}
                     value={it.qty}
                     onChange={(e) => updateItem(it.id, "qty", parseInt(e.target.value) || 1)}
-                    className="w-14 bg-zinc-950 border border-zinc-700 rounded-lg px-2 py-1.5 text-sm"
+                    className="input !h-8 !w-14 !px-2 text-center text-xs"
+                    aria-label="Jumlah"
                   />
                   <input
-                    type="number" min={0}
+                    type="number"
+                    min={0}
+                    inputMode="numeric"
                     value={it.price}
                     onChange={(e) => updateItem(it.id, "price", parseFloat(e.target.value) || 0)}
-                    className="w-24 bg-zinc-950 border border-zinc-700 rounded-lg px-2 py-1.5 text-sm text-right"
+                    className="input num !h-8 flex-1 !px-2 text-right text-xs"
+                    aria-label="Harga satuan"
                   />
-                  <button onClick={() => removeItem(it.id)} className="text-zinc-600 hover:text-red-400 px-1">✕</button>
                 </div>
-              ))}
-            </div>
+              </div>
+            ))}
           </div>
 
-          <div className="bg-zinc-900 border border-zinc-800 rounded-2xl p-4 grid grid-cols-2 gap-4">
+          <div className="card grid grid-cols-2 gap-3 p-4">
             <div>
-              <label className="text-xs text-zinc-400 uppercase tracking-widest">Subtotal</label>
+              <label className="label mb-1.5 block" htmlFor="sub">Subtotal</label>
               <input
-                type="number" value={subtotal}
+                id="sub"
+                type="number"
+                inputMode="numeric"
+                value={subtotal}
                 onChange={(e) => setSubtotal(parseFloat(e.target.value) || 0)}
-                className="mt-1 w-full bg-zinc-950 border border-zinc-700 rounded-lg px-3 py-2 text-sm"
+                className="input num !h-10 text-sm"
               />
             </div>
             <div>
-              <label className="text-xs text-zinc-400 uppercase tracking-widest">Total (incl. tax/service)</label>
+              <label className="label mb-1.5 block" htmlFor="tot">Total bayar</label>
               <input
-                type="number" value={total}
+                id="tot"
+                type="number"
+                inputMode="numeric"
+                value={total}
                 onChange={(e) => setTotal(parseFloat(e.target.value) || 0)}
-                className="mt-1 w-full bg-zinc-950 border border-zinc-700 rounded-lg px-3 py-2 text-sm font-semibold text-blue-400"
+                className="input num !h-10 text-sm font-semibold"
               />
             </div>
+            {Math.round(itemsSum) !== Math.round(subtotal) && (
+              <p className="col-span-2 text-[11px] text-amber-400/90">
+                Jumlah item {fmtRp(itemsSum)} beda dengan subtotal {fmtRp(subtotal)}. Cek lagi
+                harga/quantity-nya.
+              </p>
+            )}
           </div>
 
-          <button
-            onClick={next}
-            disabled={!canProceed}
-            className="w-full bg-blue-600 hover:bg-blue-500 disabled:opacity-40 disabled:cursor-not-allowed text-white font-semibold rounded-xl py-3 transition-colors"
-          >
-            Next: Assign participants →
-          </button>
+          <div className="bottom-bar">
+            <div className="bottom-bar-inner">
+              <button onClick={next} disabled={!canProceed} className="btn btn-primary btn-block">
+                Lanjut: pilih peserta
+              </button>
+            </div>
+          </div>
         </div>
       )}
     </main>
   );
 }
-

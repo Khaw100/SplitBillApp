@@ -3,17 +3,20 @@
 import { useEffect, useState } from "react";
 import { useParams } from "next/navigation";
 import { fmtRp } from "@/lib/api";
+import { copyText, generalMessage } from "@/lib/share";
+import { Avatar, Check, Copy, Logo, Share, Spinner, Wallet } from "@/lib/ui";
 
 export default function SharePage() {
   const { id } = useParams<{ id: string }>();
   const [snap, setSnap] = useState<any | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [copied, setCopied] = useState(false);
 
   useEffect(() => {
     if (!id) return;
     fetch(`/api/share/${id}`)
       .then(async (r) => {
-        if (!r.ok) throw new Error((await r.json().catch(() => ({}))).detail || "Not found");
+        if (!r.ok) throw new Error((await r.json().catch(() => ({}))).detail || "Link tidak valid");
         return r.json();
       })
       .then(setSnap)
@@ -22,86 +25,160 @@ export default function SharePage() {
 
   if (error)
     return (
-      <main className="min-h-screen flex items-center justify-center px-4">
-        <div className="text-center">
-          <p className="text-4xl mb-3">🧾</p>
-          <p className="text-sm text-zinc-400">{error}</p>
-          <p className="text-xs text-zinc-600 mt-1">This link is invalid or has expired.</p>
-        </div>
+      <main className="flex min-h-[100dvh] flex-col items-center justify-center gap-3 px-6 text-center">
+        <p className="text-sm text-zinc-300">{error}</p>
+        <p className="text-xs text-zinc-500">Link ini tidak ada atau sudah kedaluwarsa.</p>
       </main>
     );
 
   if (!snap)
-    return <main className="min-h-screen flex items-center justify-center text-sm text-zinc-500">Loading…</main>;
+    return (
+      <main className="flex min-h-[100dvh] items-center justify-center">
+        <Spinner size={20} />
+      </main>
+    );
 
-  const perPerson = snap.total / Math.max(1, snap.result.length);
+  const host = snap.host;
+  const people = snap.result || [];
+
+  const copySummary = async () => {
+    await copyText(
+      generalMessage({
+        title: snap.title,
+        total: snap.total,
+        people: people.map((p: any) => ({ name: p.name, total: p.total })),
+        host,
+        url: location.href,
+      })
+    );
+    setCopied(true);
+    setTimeout(() => setCopied(false), 1600);
+  };
 
   return (
-    <main className="min-h-screen max-w-xl mx-auto px-4 py-10">
-      <header className="mb-6">
-        <div className="flex items-center gap-2">
-          <h1 className="text-xl font-bold text-zinc-100">{snap.title}</h1>
-          <span className="text-[10px] uppercase tracking-widest text-zinc-600 bg-zinc-900 border border-zinc-800 rounded-full px-2 py-0.5">
-            shared
-          </span>
+    <main className="page">
+      <header className="topbar">
+        <div className="min-w-0">
+          <p className="label">Hasil split</p>
+          <h1 className="topbar-title truncate">{snap.title}</h1>
         </div>
-        <p className="text-xs text-zinc-500 mt-0.5">Split result · read-only</p>
+        <Logo compact />
       </header>
 
-      <div className="grid grid-cols-3 gap-3 mb-8">
-        <Card label="People" value={String(snap.result.length)} />
-        <Card label="Grand total" value={fmtRp(snap.total)} accent />
-        <Card label="Per person" value={fmtRp(perPerson)} />
-      </div>
+      <section className="card mb-3 p-5">
+        <p className="label">Total bill</p>
+        <p className="money-xl mt-2">{fmtRp(snap.total)}</p>
+        <p className="mt-2 text-[11px] text-zinc-500">
+          {people.length} orang · {String(snap.created_at || "").slice(0, 10)}
+        </p>
+      </section>
 
-      <div className="space-y-4">
-        {snap.result.map((p: any) => (
-          <div key={p.name} className="bg-zinc-900 border border-zinc-800 rounded-2xl p-4">
-            <div className="flex items-center justify-between mb-3 pb-3 border-b border-zinc-800">
-              <h2 className="text-sm font-semibold text-zinc-200">{p.name}</h2>
-              <p className="text-sm">
-                <span className="text-zinc-500 text-xs mr-2">TOTAL</span>
-                <span className="font-bold text-blue-400">{fmtRp(p.total)}</span>
-              </p>
-            </div>
-            <table className="w-full text-sm">
-              <tbody>
-                {p.lines.map((l: any, i: number) => (
-                  <tr key={i} className="border-b border-zinc-800/50 last:border-0">
-                    <td className="py-2 text-zinc-300">
-                      {l.name}
-                      {l.shared_by > 1 && (
-                        <span className="ml-2 text-[10px] uppercase tracking-wider text-amber-400/80">÷{l.shared_by}</span>
-                      )}
-                    </td>
-                    <td className="py-2 text-right text-zinc-500">{l.qty}×</td>
-                    <td className="py-2 text-right text-zinc-400">{fmtRp(l.line_total)}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-            <p className="text-xs text-zinc-600 mt-2">
-              subtotal {fmtRp(p.subtotal)} · others* {fmtRp(p.others)}
+      <section className="card mb-5 overflow-hidden">
+        <div className="flex items-center gap-3 px-4 py-3">
+          <span className="flex h-9 w-9 items-center justify-center rounded-xl bg-zinc-800 text-zinc-300">
+            <Wallet size={17} />
+          </span>
+          <div className="min-w-0 flex-1">
+            <p className="text-sm font-medium text-zinc-100">
+              {host?.is_owner ? "Transfer ke " : "Bayar ke "}
+              {host?.name || "host"}
+            </p>
+            <p className="mt-0.5 text-[11px] text-zinc-500">
+              {host?.is_owner ? "info rekening di bawah" : "langsung ke orangnya"}
             </p>
           </div>
+        </div>
+
+        {host?.is_owner && ((host.accounts || []).length > 0 || host.phone) ? (
+          <div className="border-t border-[var(--line)]">
+            {(host.accounts || []).map((a: any) => (
+              <div
+                key={a.label + a.number}
+                className="flex items-center justify-between gap-3 border-b border-[var(--line)] px-4 py-2.5 last:border-b-0"
+              >
+                <div className="min-w-0">
+                  <p className="text-[11px] uppercase tracking-wider text-zinc-500">{a.label}</p>
+                  <p className="num mt-0.5 truncate text-sm text-zinc-100">{a.number}</p>
+                  {a.holder && <p className="mt-0.5 text-[11px] text-zinc-600">a/n {a.holder}</p>}
+                </div>
+                <button
+                  onClick={() => copyText(a.number)}
+                  className="btn btn-secondary btn-sm"
+                  aria-label="Salin"
+                >
+                  <Copy size={13} /> Salin
+                </button>
+              </div>
+            ))}
+            {host.phone && (
+              <div className="flex items-center justify-between gap-3 px-4 py-2.5">
+                <div>
+                  <p className="text-[11px] uppercase tracking-wider text-zinc-500">Nomor HP / WA</p>
+                  <p className="num mt-0.5 text-sm text-zinc-100">{host.phone}</p>
+                </div>
+                <button onClick={() => copyText(host.phone)} className="btn btn-secondary btn-sm">
+                  <Copy size={13} /> Salin
+                </button>
+              </div>
+            )}
+          </div>
+        ) : (
+          <div className="border-t border-[var(--line)] px-4 py-3">
+            <p className="text-[12px] leading-relaxed text-zinc-400">
+              Bayar langsung ke <span className="text-zinc-100">{host?.name || "host"}</span>.
+            </p>
+          </div>
+        )}
+      </section>
+
+      <h2 className="label mb-2">Pembagian</h2>
+      <ul className="space-y-2">
+        {people.map((p: any) => (
+          <li key={p.name} className="card overflow-hidden">
+            <div className="flex items-center gap-3 px-4 py-3">
+              <Avatar name={p.name} />
+              <div className="min-w-0 flex-1">
+                <p className="truncate text-sm font-medium text-zinc-100">{p.name}</p>
+                <p className="mt-0.5 text-[11px] text-zinc-500">{p.lines.length} item</p>
+              </div>
+              <p className="num shrink-0 text-[15px] font-semibold text-zinc-100">
+                {fmtRp(p.total)}
+              </p>
+            </div>
+            <details className="border-t border-[var(--line)]">
+              <summary className="cursor-pointer px-4 py-2 text-[11px] text-zinc-500 hover:text-zinc-300">
+                Lihat rincian item
+              </summary>
+              <div className="px-4 pb-3">
+                {p.lines.map((l: any, i: number) => (
+                  <div key={i} className="flex items-baseline justify-between gap-3 py-1">
+                    <p className="min-w-0 flex-1 truncate text-[13px] text-zinc-400">
+                      {l.name}
+                      {l.shared_by > 1 && (
+                        <span className="ml-1.5 text-[10px] text-zinc-600">÷{l.shared_by}</span>
+                      )}
+                    </p>
+                    <p className="num text-[12px] text-zinc-500">{fmtRp(l.line_total)}</p>
+                  </div>
+                ))}
+                <div className="mt-2 flex items-baseline justify-between border-t border-[var(--line)] pt-2">
+                  <p className="text-[12px] text-zinc-500">Item {fmtRp(p.subtotal)}</p>
+                  <p className="text-[12px] text-zinc-500">Pajak/lainnya {fmtRp(p.others)}</p>
+                </div>
+              </div>
+            </details>
+          </li>
         ))}
-      </div>
-      <p className="text-xs text-zinc-700 mt-4">*tax, service, discount etc.</p>
+      </ul>
 
-      <footer className="mt-10 text-center">
-        <a href="/" className="text-xs text-blue-400 hover:text-blue-300">
-          💵 Split your own bill →
-        </a>
-      </footer>
+      <button onClick={copySummary} className="btn btn-secondary btn-block mt-5">
+        {copied ? <Check size={15} /> : <Share size={15} />}
+        {copied ? "Ringkasan disalin" : "Salin ringkasan"}
+      </button>
+
+      <p className="mt-6 text-center text-[11px] leading-relaxed text-zinc-600">
+        Halaman ini hanya bisa dilihat, tidak bisa diubah. Dibuat dengan splitbill.
+      </p>
     </main>
-  );
-}
-
-function Card({ label, value, accent }: { label: string; value: string; accent?: boolean }) {
-  return (
-    <div className={`rounded-2xl border p-4 ${accent ? "bg-blue-950/20 border-blue-900/60" : "bg-zinc-900 border-zinc-800"}`}>
-      <p className="text-[10px] uppercase tracking-widest text-zinc-500 font-semibold mb-1">{label}</p>
-      <p className={`font-bold ${accent ? "text-blue-400" : "text-zinc-100"}`}>{value}</p>
-    </div>
   );
 }
