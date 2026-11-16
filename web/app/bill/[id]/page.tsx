@@ -1,154 +1,250 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { useParams } from "next/navigation";
-import { api, fmtRp } from "@/lib/api";
+import { useParams, useRouter } from "next/navigation";
+import Link from "next/link";
+import { api, copyText, fmtDate, fmtMoney } from "@/lib/api";
+import type { Item, PersonResult } from "@/lib/split";
+import {
+  ActionBar,
+  Alert,
+  CenterMessage,
+  Container,
+  Icon,
+  PersonCard,
+  Skeleton,
+  Spinner,
+  Stepper,
+  SummaryPanel,
+  TopBar,
+  btn,
+} from "@/components/ui";
+
+type Bill = {
+  id: string;
+  title: string;
+  currency: string;
+  items: Item[];
+  subtotal: number;
+  total: number;
+  participants: string[];
+  created_at: string;
+  result: PersonResult[];
+};
+
+function csvCell(v: string | number) {
+  const s = String(v ?? "");
+  return /[",\n\r]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+}
 
 export default function BillReport() {
   const { id } = useParams<{ id: string }>();
-  const [bill, setBill] = useState<any>(null);
-  const [result, setResult] = useState<any[] | null>(null);
+  const router = useRouter();
+  const [bill, setBill] = useState<Bill | null>(null);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
   const [shareUrl, setShareUrl] = useState<string | null>(null);
+  const [sharing, setSharing] = useState(false);
   const [copied, setCopied] = useState<string | null>(null);
 
-  // fetch bill, then compute result via a temp share (server-side math)
   useEffect(() => {
     if (!id) return;
-    api(`/bills/${id}`).then(async (b) => {
-      setBill(b);
-      const s = await api(`/bills/${id}/share`, { method: "POST" });
-      const snap = await fetch(`/api/share/${s.share_id}`).then((r) => r.json());
-      setResult(snap.result);
-    });
+    api(`/bills/${id}`)
+      .then(setBill)
+      .catch((e) => setLoadError(e.message));
   }, [id]);
 
-  if (!bill) {
-    return <main className="min-h-screen flex items-center justify-center text-sm text-zinc-500">Loading…</main>;
+  if (loadError) {
+    return (
+      <>
+        <TopBar title="Bill" back="/" />
+        <CenterMessage title="Couldn't load this bill">
+          <p>{loadError}</p>
+          <Link href="/" className={`${btn.secondary} mt-5`}>
+            Back to bills
+          </Link>
+        </CenterMessage>
+      </>
+    );
   }
 
-  const itemsById = Object.fromEntries(bill.items.map((i: any) => [i.id, i]));
-  const grand = bill.total;
-  const perPerson = grand / Math.max(1, (result || bill.participants).length);
+  if (!bill) {
+    return (
+      <>
+        <TopBar title="Loading…" back="/" />
+        <Container className="py-6 grid gap-6 lg:grid-cols-[1fr_340px]">
+          <div className="space-y-4">
+            <Skeleton className="h-48" />
+            <Skeleton className="h-48" />
+          </div>
+          <Skeleton className="h-56 order-first lg:order-none" />
+        </Container>
+      </>
+    );
+  }
+
+  const cur = bill.currency || "Rp";
+  const result = bill.result || [];
+
+  const flash = (tag: string) => {
+    setCopied(tag);
+    setTimeout(() => setCopied((c) => (c === tag ? null : c)), 1800);
+  };
 
   const buildText = () => {
-    const lines: string[] = [`💵 ${bill.title} — SPLIT RESULT`, ""];
-    for (const p of result || []) {
-      lines.push(`👤 ${p.name} — total ${fmtRp(p.total)}`);
+    const lines: string[] = [`🧾 ${bill.title} — split result`, ""];
+    for (const p of result) {
+      lines.push(`👤 ${p.name}: ${fmtMoney(p.total, cur)}`);
       for (const l of p.lines) {
-        const shared = l.shared_by > 1 ? ` (split ${l.shared_by}x)` : "";
-        lines.push(`   • ${l.name} ${l.qty}× : ${fmtRp(l.line_total)}${shared}`);
+        const shared = l.shared_by > 1 ? ` (÷${l.shared_by})` : "";
+        lines.push(`   • ${l.name} ${l.qty}× — ${fmtMoney(l.line_total, cur)}${shared}`);
       }
-      lines.push(`   subtotal ${fmtRp(p.subtotal)} + others* ${fmtRp(p.others)}`);
+      if (p.others) lines.push(`   + tax/service ${fmtMoney(p.others, cur)}`);
       lines.push("");
     }
-    lines.push("TOTAL: " + fmtRp(grand));
-    lines.push("*tax/service/discount");
+    lines.push(`TOTAL: ${fmtMoney(bill.total, cur)}`);
+    if (shareUrl) lines.push(`Details: ${shareUrl}`);
     return lines.join("\n");
   };
 
-  const copy = async (text: string, tag: string) => {
-    await navigator.clipboard.writeText(text);
-    setCopied(tag);
-    setTimeout(() => setCopied(null), 1500);
+  const copyResult = async () => {
+    if (await copyText(buildText())) flash("text");
+    else setError("Couldn't access the clipboard.");
   };
 
   const downloadCsv = () => {
-    const rows = ["participant,item,qty,price_per_unit,line_total"];
-    for (const p of result || [])
-      for (const l of p.lines)
-        rows.push(`"${p.name}","${l.name}",${l.qty},${l.price},${l.line_total}`);
-    const blob = new Blob([rows.join("\n")], { type: "text/csv" });
+    const rows = [["participant", "item", "qty", "unit_price", "shared_by", "line_total"].join(",")];
+    for (const p of result) {
+      for (const l of p.lines) rows.push([p.name, l.name, l.qty, l.price, l.shared_by, l.line_total].map(csvCell).join(","));
+      rows.push([p.name, "tax/service/discount", "", "", "", p.others].map(csvCell).join(","));
+      rows.push([p.name, "TOTAL", "", "", "", p.total].map(csvCell).join(","));
+    }
+    // BOM so Excel opens UTF-8 names correctly
+    const blob = new Blob(["﻿" + rows.join("\r\n")], { type: "text/csv;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
-    a.href = URL.createObjectURL(blob);
-    a.download = `${bill.title.replace(/\W+/g, "_")}_split.csv`;
+    a.href = url;
+    a.download = `${bill.title.replace(/[^\w-]+/g, "_") || "bill"}_split.csv`;
     a.click();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
   };
 
-  const makeShare = async () => {
+  const getShareUrl = async () => {
+    if (shareUrl) return shareUrl;
     const s = await api(`/bills/${id}/share`, { method: "POST" });
-    setShareUrl(`${location.origin}/s/${s.share_id}`);
+    const url = `${location.origin}/s/${s.share_id}`;
+    setShareUrl(url);
+    return url;
   };
 
-  return (
-    <main className="min-h-screen max-w-2xl mx-auto px-4 py-10">
-      <header className="flex items-center justify-between mb-6">
-        <div>
-          <h1 className="text-xl font-bold text-zinc-100">{bill.title}</h1>
-          <p className="text-xs text-zinc-500 mt-0.5">Split report</p>
-        </div>
-        <a href="/" className="text-xs text-zinc-500 hover:text-zinc-300 border border-zinc-800 rounded-lg px-3 py-1.5">
-          ← Bills
-        </a>
-      </header>
+  const share = async () => {
+    setSharing(true);
+    setError(null);
+    try {
+      const url = await getShareUrl();
+      // Native share sheet on phones (WhatsApp, LINE, …); clipboard elsewhere
+      if (typeof navigator.share === "function" && window.matchMedia("(pointer: coarse)").matches) {
+        await navigator.share({ title: bill.title, text: `Split result for ${bill.title}`, url }).catch(() => {});
+      } else if (await copyText(url)) {
+        flash("link");
+      }
+    } catch (e: any) {
+      setError(e.message || "Couldn't create a share link");
+    } finally {
+      setSharing(false);
+    }
+  };
 
-      {/* Summary cards */}
-      <div className="grid grid-cols-3 gap-3 mb-8">
-        <Card label="People" value={String((result || bill.participants).length)} />
-        <Card label="Grand total" value={fmtRp(grand)} accent />
-        <Card label="Per person" value={fmtRp(perPerson)} />
-      </div>
+  const remove = async () => {
+    if (!confirm(`Delete "${bill.title}"? Shared links will stop working.`)) return;
+    try {
+      await api(`/bills/${id}`, { method: "DELETE" });
+      router.replace("/");
+    } catch (e: any) {
+      setError(e.message);
+    }
+  };
 
-      {/* Export bar */}
-      <div className="flex gap-2 mb-8">
-        <button onClick={() => copy(buildText(), "copy")} className="flex-1 text-xs bg-zinc-900 hover:bg-zinc-800 border border-zinc-800 rounded-lg py-2.5 font-medium text-zinc-300 transition-colors">
-          {copied === "copy" ? "✓ Copied!" : "📋 Copy result"}
-        </button>
-        <button onClick={downloadCsv} className="flex-1 text-xs bg-zinc-900 hover:bg-zinc-800 border border-zinc-800 rounded-lg py-2.5 font-medium text-zinc-300 transition-colors">
-          ⬇️ CSV
-        </button>
-        <button onClick={makeShare} className="flex-1 text-xs bg-blue-600 hover:bg-blue-500 rounded-lg py-2.5 font-semibold text-white transition-colors">
-          🔗 Share link
-        </button>
-      </div>
-
-      {shareUrl && (
-        <div
-          onClick={() => copy(shareUrl, "url")}
-          className="cursor-pointer bg-blue-950/30 border border-blue-900 rounded-xl px-4 py-3 mb-8 text-xs text-blue-300 truncate"
-          title="Click to copy"
-        >
-          {copied === "url" ? "✓ Link copied — send it to your friends!" : shareUrl}
-        </div>
-      )}
-
-      {/* Per-participant breakdown */}
-      <div className="space-y-4">
-        {(result || []).map((p) => (
-          <div key={p.name} className="bg-zinc-900 border border-zinc-800 rounded-2xl p-4">
-            <div className="flex items-center justify-between mb-3 pb-3 border-b border-zinc-800">
-              <h2 className="text-sm font-semibold text-zinc-200">{p.name}</h2>
-              <p className="text-sm"><span className="text-zinc-500 text-xs mr-2">TOTAL</span>
-                <span className="font-bold text-blue-400">{fmtRp(p.total)}</span></p>
-            </div>
-            <table className="w-full text-sm">
-              <tbody>
-                {p.lines.map((l: any, i: number) => (
-                  <tr key={i} className="border-b border-zinc-800/50 last:border-0">
-                    <td className="py-2 text-zinc-300">{l.name}{l.shared_by > 1 &&
-                      <span className="ml-2 text-[10px] uppercase tracking-wider text-amber-400/80">÷{l.shared_by}</span>}
-                    </td>
-                    <td className="py-2 text-right text-zinc-500">{l.qty}×</td>
-                    <td className="py-2 text-right text-zinc-400">{fmtRp(l.line_total)}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-            <p className="text-xs text-zinc-600 mt-2">
-              subtotal {fmtRp(p.subtotal)} · others* {fmtRp(p.others)}
-            </p>
-          </div>
-        ))}
-      </div>
-      <p className="text-xs text-zinc-700 mt-4">*tax, service, discount etc.</p>
-    </main>
-  );
-}
-
-function Card({ label, value, accent }: { label: string; value: string; accent?: boolean }) {
-  return (
-    <div className={`rounded-2xl border p-4 ${accent ? "bg-blue-950/20 border-blue-900/60" : "bg-zinc-900 border-zinc-800"}`}>
-      <p className="text-[10px] uppercase tracking-widest text-zinc-500 font-semibold mb-1">{label}</p>
-      <p className={`font-bold ${accent ? "text-blue-400" : "text-zinc-100"}`}>{value}</p>
+  const actions = (
+    <div className="grid grid-cols-[1fr_1fr_1.4fr] lg:grid-cols-1 gap-2">
+      <button onClick={copyResult} className={`${btn.secondary} lg:justify-start`}>
+        <Icon name={copied === "text" ? "check" : "copy"} />
+        <span className="truncate">{copied === "text" ? "Copied" : <>Copy<span className="hidden lg:inline"> as text</span></>}</span>
+      </button>
+      <button onClick={downloadCsv} className={`${btn.secondary} lg:justify-start`}>
+        <Icon name="download" /> CSV
+      </button>
+      <button onClick={share} disabled={sharing} className={`${btn.primary} !h-11 lg:!h-12`}>
+        {sharing ? <Spinner className="size-4" /> : <Icon name={copied === "link" ? "check" : "share"} />}
+        {copied === "link" ? "Link copied" : "Share"}
+      </button>
     </div>
+  );
+
+  return (
+    <>
+      <TopBar
+        title={bill.title}
+        subtitle={fmtDate(bill.created_at)}
+        back="/"
+        right={
+          <button onClick={remove} className={btn.icon} aria-label="Delete bill" title="Delete bill">
+            <Icon name="trash" />
+          </button>
+        }
+      />
+
+      <Container className="py-6 pb-32 lg:pb-12">
+        <div className="mb-6">
+          <Stepper step={3} />
+        </div>
+
+        <div className="grid gap-6 lg:grid-cols-[1fr_340px] lg:items-start">
+          {/* Sidebar first on mobile (summary on top), right column on desktop */}
+          <aside className="space-y-4 lg:sticky lg:top-24 lg:order-last">
+            <SummaryPanel total={bill.total} people={result.length} currency={cur} />
+
+            {/* compact ranking */}
+            <div className="hidden lg:block rounded-2xl border border-zinc-800 bg-zinc-900/60 divide-y divide-zinc-800/60">
+              {result.map((p) => (
+                <div key={p.name} className="flex justify-between gap-3 px-4 py-2.5 text-sm">
+                  <span className="truncate text-zinc-400">{p.name}</span>
+                  <span className="tabular-nums font-medium text-zinc-200">{fmtMoney(p.total, cur)}</span>
+                </div>
+              ))}
+            </div>
+
+            {error && <Alert>{error}</Alert>}
+
+            {shareUrl && (
+              <button
+                onClick={async () => (await copyText(shareUrl)) && flash("url")}
+                className="w-full flex items-center gap-2 text-left rounded-xl border border-emerald-500/30 bg-emerald-500/5 px-3.5 py-3 text-xs text-emerald-300"
+                title="Copy link"
+              >
+                <Icon name={copied === "url" ? "check" : "link"} className="size-4 shrink-0" />
+                <span className="truncate">{copied === "url" ? "Link copied — send it to your friends!" : shareUrl}</span>
+              </button>
+            )}
+
+            <div className="hidden lg:block">{actions}</div>
+          </aside>
+
+          <section className="min-w-0">
+            <h2 className="text-sm font-semibold text-zinc-300 mb-3">Per person</h2>
+            <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-1 xl:grid-cols-2 items-start">
+              {result.map((p) => (
+                <PersonCard key={p.name} p={p} currency={cur} />
+              ))}
+            </div>
+            <p className="text-xs text-zinc-600 mt-4">
+              Tax, service and discounts are split proportionally to what each person ordered.
+            </p>
+          </section>
+        </div>
+      </Container>
+
+      <ActionBar className="lg:hidden">{actions}</ActionBar>
+    </>
   );
 }
