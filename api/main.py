@@ -151,13 +151,99 @@ def normalize_account(a: dict) -> dict:
     }
 
 
+# ── Hub common codes (payout accounts) ───────────────────────────────────────
+_SA_TOKEN = {"value": None, "exp": 0.0}
+_ACCT_CACHE = {"data": None, "at": 0.0}
+
+
+def hub_service_token(force: bool = False) -> str:
+    """Access token for the Hub service account scoped to the accounts code."""
+    import time
+
+    import httpx
+
+    cid = os.environ.get("HUB_SA_CLIENT_ID", "")
+    secret = os.environ.get("HUB_SA_CLIENT_SECRET", "")
+    if not cid or not secret:
+        return ""
+    now = time.time()
+    if not force and _SA_TOKEN["value"] and _SA_TOKEN["exp"] > now:
+        return _SA_TOKEN["value"] or ""
+    try:
+        r = httpx.post(
+            f"{HUB_BASE}/common/token",
+            json={"client_id": cid, "client_secret": secret},
+            timeout=8,
+        )
+        if r.status_code != 200:
+            return ""
+        d = r.json()
+        _SA_TOKEN["value"] = d.get("access_token")
+        _SA_TOKEN["exp"] = now + int(d.get("expires_in") or 3600) - 120
+        return _SA_TOKEN["value"] or ""
+    except Exception:
+        return ""
+
+
+def hub_common_accounts(force: bool = False) -> list[dict]:
+    """Owner payout accounts from a Hub common-code group (e.g. `personal-data`).
+
+    Wipiii keeps his bank/e-wallet rows in Hub → Common Codes, so client apps read
+    them with the service-account token instead of duplicating them in app config.
+    detail.attr1 = account number, attr2 = optional account holder.
+    """
+    import time
+
+    import httpx
+
+    key = os.environ.get("HUB_ACCOUNTS_CODE", "")
+    if not key:
+        return []
+    now = time.time()
+    if not force and _ACCT_CACHE["data"] is not None and now - _ACCT_CACHE["at"] < _CFG_TTL:
+        return _ACCT_CACHE["data"] or []
+
+    token = hub_service_token()
+    if not token:
+        return []
+    try:
+        r = httpx.get(
+            f"{HUB_BASE}/common/{key}",
+            headers={"Authorization": f"Bearer {token}"},
+            timeout=8,
+        )
+        if r.status_code != 200:
+            return []
+        rows = []
+        for d in r.json().get("details", []):
+            number = (d.get("attr1") or "").strip()
+            if not number:
+                continue
+            rows.append(
+                {
+                    "label": (d.get("name") or "").strip(),
+                    "number": number,
+                    "holder": (d.get("attr2") or "").strip(),
+                }
+            )
+    except Exception:
+        return []
+    _ACCT_CACHE["data"] = rows
+    _ACCT_CACHE["at"] = now
+    return rows
+
+
 def read_settings() -> dict:
-    """Owner profile: Hub app config first, local/env row only as a fallback."""
+    """Owner profile: Hub common codes for accounts, Hub app config for name/phone."""
     cfg = hub_app_config()
     name = (cfg.get("owner_name") or cfg.get("recipient_name") or "").strip()
     phone = (cfg.get("owner_phone") or cfg.get("recipient_phone") or "").strip()
-    raw_accounts = cfg.get("owner_accounts") or cfg.get("recipient_accounts") or []
-    accounts = [normalize_account(a) for a in raw_accounts if (a.get("number") or "").strip()]
+
+    # Payout accounts live in Hub → Common Codes (group key from HUB_ACCOUNTS_CODE).
+    accounts = hub_common_accounts()
+    if not accounts:
+        raw_accounts = cfg.get("owner_accounts") or cfg.get("recipient_accounts") or []
+        accounts = [normalize_account(a) for a in raw_accounts if (a.get("number") or "").strip()]
 
     if not name and not phone and not accounts:
         with get_db() as db:
@@ -168,6 +254,15 @@ def read_settings() -> dict:
             name = row["name"] or ""
             phone = row["phone"] or ""
             accounts = [normalize_account(a) for a in json.loads(row["accounts_json"] or "[]")]
+
+    # A phone-number based e-wallet row doubles as the WhatsApp/contact number.
+    if not phone:
+        for a in accounts:
+            digits = "".join(ch for ch in a["number"] if ch.isdigit())
+            if digits.startswith("08") and 10 <= len(digits) <= 14:
+                phone = a["number"]
+                break
+
     if not name:
         name = os.environ.get("OWNER_NAME") or "Wipiii"
     return {"name": name, "phone": phone, "accounts": accounts}
