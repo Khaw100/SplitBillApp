@@ -24,11 +24,11 @@ export default function LoginPage() {
       });
       if (!res.ok) {
         const d = await res.json().catch(() => ({}));
-        throw new Error(d.detail || "Gagal masuk");
+        throw new Error(typeof d.detail === "string" ? d.detail : "Sign-in failed");
       }
       router.replace("/");
     } catch (err: any) {
-      setError(err.message || "Gagal masuk");
+      setError(err.message || "Sign-in failed");
       setBusy(false);
     }
   };
@@ -39,16 +39,16 @@ export default function LoginPage() {
         <div className="mb-8 flex flex-col items-start gap-6">
           <Logo />
           <div>
-            <h1 className="text-2xl font-semibold tracking-tight">Masuk dulu</h1>
+            <h1 className="text-2xl font-semibold tracking-tight">Sign in</h1>
             <p className="mt-1 text-sm leading-relaxed text-zinc-500">
-              Aplikasi ini privat, cuma kamu yang bisa bikin split bill.
+              This app is private, only you can create split bills.
             </p>
           </div>
         </div>
 
         <form onSubmit={handleLogin} className="space-y-3">
           <div className="space-y-1.5">
-            <label className="label" htmlFor="u">Nama pengguna</label>
+            <label className="label" htmlFor="u">Username</label>
             <input
               id="u"
               value={username}
@@ -60,7 +60,7 @@ export default function LoginPage() {
             />
           </div>
           <div className="space-y-1.5">
-            <label className="label" htmlFor="p">Sandi</label>
+            <label className="label" htmlFor="p">Password</label>
             <input
               id="p"
               type="password"
@@ -80,12 +80,12 @@ export default function LoginPage() {
 
           <button type="submit" disabled={busy} className="btn btn-primary btn-block !mt-4">
             {busy && <Spinner size={16} />}
-            {busy ? "Memeriksa…" : "Masuk"}
+            {busy ? "Checking…" : "Sign in"}
           </button>
         </form>
 
         <p className="mt-6 text-[11px] leading-relaxed text-zinc-600">
-          Link pembayaran bisa dibuka siapa pun yang punya link-nya, tanpa login.
+          Payment links can be opened by anyone who has the link, no login needed.
         </p>
       </div>
     </main>

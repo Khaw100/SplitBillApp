@@ -139,7 +139,7 @@ export function AppHeader({
     <header className="topbar">
       <div className="flex min-w-0 items-center gap-2.5">
         {back && (
-          <Link href={back} className="icon-btn" aria-label="Kembali">
+          <Link href={back} className="icon-btn" aria-label="Back">
             <ArrowLeft size={18} />
           </Link>
         )}
