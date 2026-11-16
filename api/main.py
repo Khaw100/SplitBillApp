@@ -76,6 +76,13 @@ CREATE TABLE IF NOT EXISTS payments (
   total REAL NOT NULL,
   paid_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
+CREATE TABLE IF NOT EXISTS claims (
+  bill_id TEXT NOT NULL,
+  participant TEXT NOT NULL,
+  items_json TEXT NOT NULL,            -- {item_id: qty}
+  updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+  PRIMARY KEY (bill_id, participant)
+);
 CREATE TABLE IF NOT EXISTS settings (
   id INTEGER PRIMARY KEY CHECK (id = 1),
   name TEXT NOT NULL DEFAULT 'Wipiii',
@@ -422,8 +429,15 @@ async def bill_result(bill_id: str, user: str = Depends(require_user)):
     if not row:
         raise HTTPException(status_code=404, detail="Bill not found")
     d = dict(row)
-    snap = _bill_snapshot(d)
-    return {"result": _split_result(snap), "host": _host_of(d)}
+    result, unclaimed = _bill_result(d)
+    claims = _claims_for(bill_id)
+    return {
+        "result": result,
+        "host": _host_of(d),
+        "unclaimed": unclaimed,
+        "chosen": sorted(claims.keys()),
+        "participants": json.loads(d["participants_json"]),
+    }
 
 
 @app.delete("/bills/{bill_id}")
@@ -458,17 +472,28 @@ def _snapshot_host(snap: dict) -> dict:
     )
 
 
-def _assigned_total(snap: dict) -> float:
-    """Sum of the line totals actually covered by participants (items total)."""
-    items_by_id = {i["id"]: i for i in snap["items"]}
-    seen = {iid for ids in snap["assignments"].values() for iid in ids}
-    return float(sum(items_by_id[i]["price"] * items_by_id[i]["qty"] for i in seen if i in items_by_id))
+def _items_total(snap: dict) -> float:
+    """What the printed items add up to, before tax/service/discount."""
+    return float(sum(i["price"] * i["qty"] for i in snap["items"]))
 
 
 def _fee_ratio(snap: dict) -> float:
-    """How much tax/service/discount scales each assigned line (1.0 = none)."""
-    base = _assigned_total(snap)
+    """How much tax/service/discount scales every item line (1.0 = none)."""
+    base = _items_total(snap)
     return (float(snap["total"]) / base) if base else 1.0
+
+
+def _unit_scale(item: dict, claimed_units: int) -> float:
+    """Fraction of the printed unit price a claimer actually pays.
+
+    Claims are in printed units, so one claimant of one unit pays the unit price.
+    Only when people over-claim (more units claimed than printed) does the cost
+    get scaled down so the bill is never over-collected.
+    """
+    qty = max(1, int(item["qty"]))
+    if claimed_units <= qty:
+        return 1.0
+    return qty / claimed_units
 
 
 def _split_result(snap: dict) -> list[dict]:
@@ -507,6 +532,74 @@ def _split_result(snap: dict) -> list[dict]:
     return result
 
 
+def _claims_for(bill_id: str) -> dict[str, dict[str, int]]:
+    """{participant: {item_id: qty}} as picked by the participants themselves."""
+    with get_db() as db:
+        rows = db.execute(
+            "SELECT participant,items_json FROM claims WHERE bill_id=?", (bill_id,)
+        ).fetchall()
+    out: dict[str, dict[str, int]] = {}
+    for r in rows:
+        try:
+            raw = json.loads(r["items_json"] or "{}")
+        except json.JSONDecodeError:
+            raw = {}
+        out[r["participant"]] = {k: int(v) for k, v in raw.items() if int(v) > 0}
+    return out
+
+
+def _result_from_claims(snap: dict, claims: dict[str, dict[str, int]]) -> tuple[list[dict], int]:
+    """Per-participant totals from self-service checklists.
+
+    Each participant ticks the printed units they took, so a 2x35.000 line ticked
+    once costs 35.000. Over-claiming (more units ticked than printed) scales the
+    unit price down so the bill is never over-collected; under-claiming leaves the
+    remainder with the host ("bagianmu"). Tax/service/discount then scales every
+    line by the same ratio.
+    """
+    items_by_id = {i["id"]: i for i in snap["items"]}
+    ratio = _fee_ratio(snap)
+
+    claimed_units: dict[str, int] = {}
+    for its in claims.values():
+        for iid, q in its.items():
+            claimed_units[iid] = claimed_units.get(iid, 0) + q
+
+    raw: list[dict] = []
+    for name, its in claims.items():
+        lines, sub = [], 0.0
+        for iid, q in its.items():
+            it = items_by_id.get(iid)
+            if not it:
+                continue
+            scale = _unit_scale(it, claimed_units.get(iid, q))
+            line_total = it["price"] * q * scale
+            sub += line_total
+            lines.append(
+                {**it, "qty": q, "units": max(it["qty"], claimed_units.get(iid, q)),
+                 "line_total": round(line_total)}
+            )
+        raw.append({"name": name, "lines": lines, "subtotal": round(sub)})
+
+    result = []
+    for p in raw:
+        total = round(p["subtotal"] * ratio)
+        result.append({**p, "total": total, "others": total - p["subtotal"]})
+
+    # Whatever the participants did not pick stays with the host.
+    unclaimed = round(float(snap["total"]) - sum(p["total"] for p in result))
+    return result, unclaimed
+
+
+def _bill_result(bill: dict) -> tuple[list[dict], int]:
+    """Dispatcher: legacy hand-assigned bills keep their old math, new bills use claims."""
+    snap = _bill_snapshot(bill)
+    if snap["assignments"]:
+        return _split_result(snap), 0
+    claims = _claims_for(bill["id"])
+    return _result_from_claims(snap, claims)
+
+
 @app.post("/bills/{bill_id}/share")
 async def share_bill(bill_id: str, user: str = Depends(require_user)):
     with get_db() as db:
@@ -527,14 +620,22 @@ async def share_bill(bill_id: str, user: str = Depends(require_user)):
 async def get_share(share_id: str):
     with get_db() as db:
         row = db.execute(
-            "SELECT snapshot_json,created_at FROM shares WHERE id=?", (share_id,)
+            "SELECT bill_id,snapshot_json,created_at FROM shares WHERE id=?", (share_id,)
         ).fetchone()
     if not row:
         raise HTTPException(status_code=404, detail="Share not found")
     snap = json.loads(row["snapshot_json"])
     snap["created_at"] = row["created_at"]
     snap["host"] = _snapshot_host(snap)
-    snap["result"] = _split_result(snap)
+    with get_db() as db:
+        bill = db.execute("SELECT * FROM bills WHERE id=?", (row["bill_id"],)).fetchone()
+    if bill:
+        result, unclaimed = _bill_result(dict(bill))
+        snap["result"] = result
+        snap["unclaimed"] = unclaimed
+    else:
+        snap["result"] = _split_result(snap)
+        snap["unclaimed"] = 0
     return snap
 
 
@@ -581,16 +682,31 @@ async def get_pay(token: str):
     participant = row["participant"]
     host = _snapshot_host(snap)
     ratio = _fee_ratio(snap)
+    claims = _claims_for(row["bill_id"])
+    mine = claims.get(participant, {})
 
-    items_by_id = {i["id"]: i for i in snap["items"]}
-    my_ids = snap["assignments"].get(participant, [])
-    lines = []
-    for iid in my_ids:
-        it = items_by_id.get(iid)
-        if not it:
-            continue
-        share_count = sum(1 for ids in snap["assignments"].values() if iid in ids)
-        lines.append({**it, "shared_by": share_count, "line_total": round(it["price"] * it["qty"] / max(1, share_count) * ratio)})
+    claimed_units: dict[str, int] = {}
+    for its in claims.values():
+        for iid, q in its.items():
+            claimed_units[iid] = claimed_units.get(iid, 0) + q
+
+    items = []
+    for it in snap["items"]:
+        scale = _unit_scale(it, claimed_units.get(it["id"], 0))
+        my_q = mine.get(it["id"], 0)
+        items.append(
+            {
+                **it,
+                "unit_scale": round(scale, 4),
+                "claimed_by_others": sum(
+                    1 for p, its in claims.items() if p != participant and it["id"] in its
+                ),
+                "my_qty": my_q,
+                "line_total": round(it["price"] * my_q * scale * ratio),
+            }
+        )
+
+    my_total = round(sum(it["price"] * it["my_qty"] * it["unit_scale"] for it in items) * ratio)
 
     with get_db() as db:
         pay = db.execute(
@@ -603,14 +719,63 @@ async def get_pay(token: str):
         "title": snap["title"],
         "currency": snap["currency"],
         "participant": participant,
-        "items": lines,
+        "items": items,
         "subtotal": snap["subtotal"],
         "total": snap["total"],
+        "my_total": my_total,
+        "chosen": bool(mine),
         "host": host,
         "recipient": None,
         "fee_ratio": ratio,
         "paid": dict(pay) if pay else None,
     }
+
+
+def _clean_claim(snap: dict, chosen: list[dict]) -> dict[str, int]:
+    valid = {i["id"]: i for i in snap["items"]}
+    out: dict[str, int] = {}
+    for c in chosen:
+        iid = c.get("id")
+        if not isinstance(iid, str) or iid not in valid:
+            continue
+        qty = int(c.get("qty", 0))
+        cap = max(1, int(valid[iid]["qty"]))
+        if qty > 0:
+            out[iid] = min(qty, cap)
+    return out
+
+
+def _claim_total(bill_id: str, snap: dict, participant: str, mine: dict[str, int]) -> int:
+    """Total for one participant, with everyone else's current picks included."""
+    claims = _claims_for(bill_id)
+    claims[participant] = mine
+    result, _ = _result_from_claims(snap, claims)
+    for p in result:
+        if p["name"] == participant:
+            return p["total"]
+    return 0
+
+
+@app.post("/pay/{token}/claim")
+async def save_claim(token: str, request: Request):
+    """Save the checklist a participant ticked (no payment implied)."""
+    with get_db() as db:
+        row = db.execute(
+            "SELECT bill_id,snapshot_json,participant FROM shares WHERE id=? AND kind='pay'",
+            (token,),
+        ).fetchone()
+    if not row:
+        raise HTTPException(status_code=404, detail="Pay link not found")
+    snap = json.loads(row["snapshot_json"])
+    body = await request.json()
+    mine = _clean_claim(snap, body.get("items", []))
+    with get_db() as db:
+        db.execute(
+            "INSERT INTO claims (bill_id,participant,items_json,updated_at) VALUES (?,?,?,datetime('now')) "
+            "ON CONFLICT(bill_id,participant) DO UPDATE SET items_json=excluded.items_json, updated_at=datetime('now')",
+            (row["bill_id"], row["participant"], json.dumps(mine)),
+        )
+    return {"ok": True, "items": mine, "total": _claim_total(row["bill_id"], snap, row["participant"], mine)}
 
 
 @app.post("/pay/{token}/confirm")
@@ -625,25 +790,25 @@ async def confirm_pay(token: str, request: Request):
     snap = json.loads(row["snapshot_json"])
     participant = row["participant"]
     body = await request.json()
-    chosen = body.get("items", [])  # [{id, qty}]
-
-    items_by_id = {i["id"]: i for i in snap["items"]}
-    allowed = set(snap["assignments"].get(participant, []))
-    ratio = _fee_ratio(snap)
-    total = 0.0
-    for c in chosen:
-        if c.get("id") not in allowed:
-            continue
-        it = items_by_id[c["id"]]
-        qty = max(1, int(c.get("qty", 1)))
-        share_count = sum(1 for ids in snap["assignments"].values() if c["id"] in ids)
-        total += it["price"] * qty / max(1, share_count)
-    total = round(total * ratio)
+    mine = _clean_claim(snap, body.get("items", []))
 
     with get_db() as db:
         db.execute(
+            "INSERT INTO claims (bill_id,participant,items_json,updated_at) VALUES (?,?,?,datetime('now')) "
+            "ON CONFLICT(bill_id,participant) DO UPDATE SET items_json=excluded.items_json, updated_at=datetime('now')",
+            (row["bill_id"], participant, json.dumps(mine)),
+        )
+    total = _claim_total(row["bill_id"], snap, participant, mine)
+    with get_db() as db:
+        db.execute(
             "INSERT INTO payments (id,bill_id,participant,items_json,total) VALUES (?,?,?,?,?)",
-            (uuid.uuid4().hex[:12], row["bill_id"], participant, json.dumps(chosen), total),
+            (
+                uuid.uuid4().hex[:12],
+                row["bill_id"],
+                participant,
+                json.dumps([{"id": k, "qty": v} for k, v in mine.items()]),
+                total,
+            ),
         )
     return {"ok": True, "total": total}
 
@@ -651,13 +816,27 @@ async def confirm_pay(token: str, request: Request):
 @app.get("/bills/{bill_id}/status")
 async def bill_status(bill_id: str, user: str = Depends(require_user)):
     with get_db() as db:
-        row = db.execute("SELECT participants_json FROM bills WHERE id=?", (bill_id,)).fetchone()
+        row = db.execute("SELECT * FROM bills WHERE id=?", (bill_id,)).fetchone()
     if not row:
         raise HTTPException(status_code=404, detail="Bill not found")
-    participants = json.loads(row["participants_json"])
+    d = dict(row)
+    participants = json.loads(d["participants_json"])
+    result, unclaimed = _bill_result(d)
+    totals = {p["name"]: p["total"] for p in result}
     with get_db() as db:
         pays = db.execute(
             "SELECT participant,total,paid_at FROM payments WHERE bill_id=?", (bill_id,)
         ).fetchall()
     paid = {p["participant"]: dict(p) for p in pays}
-    return {"participants": [{"name": p, "paid": paid.get(p)} for p in participants]}
+    return {
+        "unclaimed": unclaimed,
+        "participants": [
+            {
+                "name": p,
+                "chosen": p in totals,
+                "total": totals.get(p, 0),
+                "paid": paid.get(p),
+            }
+            for p in participants
+        ],
+    }

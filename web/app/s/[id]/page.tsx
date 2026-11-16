@@ -72,7 +72,6 @@ export default function SharePage() {
           {people.length} orang · {String(snap.created_at || "").slice(0, 10)}
         </p>
       </section>
-
       <section className="card mb-5 overflow-hidden">
         <div className="flex items-center gap-3 px-4 py-3">
           <span className="flex h-9 w-9 items-center justify-center rounded-xl bg-zinc-800 text-zinc-300">
@@ -154,8 +153,10 @@ export default function SharePage() {
                   <div key={i} className="flex items-baseline justify-between gap-3 py-1">
                     <p className="min-w-0 flex-1 truncate text-[13px] text-zinc-400">
                       {l.name}
-                      {l.shared_by > 1 && (
-                        <span className="ml-1.5 text-[10px] text-zinc-600">÷{l.shared_by}</span>
+                      {l.units > l.qty && (
+                        <span className="ml-1.5 text-[10px] text-zinc-600">
+                          ({l.qty}/{l.units})
+                        </span>
                       )}
                     </p>
                     <p className="num text-[12px] text-zinc-500">{fmtRp(l.line_total)}</p>

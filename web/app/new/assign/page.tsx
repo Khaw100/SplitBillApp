@@ -15,7 +15,6 @@ export default function AssignPage() {
   });
   const [participants, setParticipants] = useState<string[]>([]);
   const [newName, setNewName] = useState("");
-  const [assignments, setAssignments] = useState<Record<string, string[]>>({});
   const [hostMode, setHostMode] = useState<"me" | "other">("me");
   const [hostName, setHostName] = useState("");
   const [saving, setSaving] = useState(false);
@@ -39,43 +38,11 @@ export default function AssignPage() {
     const name = newName.trim();
     if (!name || participants.some((p) => p.toLowerCase() === name.toLowerCase())) return;
     setParticipants((p) => [...p, name]);
-    setAssignments((a) => ({ ...a, [name]: [] }));
     setNewName("");
   };
 
-  const removeParticipant = (name: string) => {
-    setParticipants((ps) => ps.filter((x) => x !== name));
-    setAssignments(({ [name]: _drop, ...rest }) => rest);
-  };
-
-  const toggle = (participant: string, itemId: string) => {
-    setAssignments((prev) => {
-      const cur = prev[participant] || [];
-      return {
-        ...prev,
-        [participant]: cur.includes(itemId)
-          ? cur.filter((i) => i !== itemId)
-          : [...cur, itemId],
-      };
-    });
-  };
-
-  const assignAll = (mode: "all" | "clear") => {
-    setAssignments(() => {
-      const next: Record<string, string[]> = {};
-      for (const p of participants) {
-        next[p] = mode === "all" ? draft.items.map((it: any) => it.id) : [];
-      }
-      return next;
-    });
-  };
-
-  const unassigned = draft.items.filter(
-    (it: any) => !Object.values(assignments).some((ids) => ids.includes(it.id))
-  );
-
   const hostOk = hostMode === "me" || hostName.trim().length > 0;
-  const canSave = participants.length > 0 && unassigned.length === 0 && hostOk && !saving;
+  const canSave = participants.length > 0 && hostOk && !saving;
 
   const save = async () => {
     setSaving(true);
@@ -89,7 +56,7 @@ export default function AssignPage() {
           subtotal: draft.subtotal,
           total: draft.total,
           participants,
-          assignments,
+          assignments: {},
           host_is_owner: hostMode === "me",
           host_name: hostMode === "me" ? settings.name : hostName.trim(),
         }),
@@ -111,7 +78,7 @@ export default function AssignPage() {
 
   return (
     <main className="page page-bar">
-      <AppHeader title="Pilih peserta" subtitle={draft.title} back="/new" />
+      <AppHeader title="Siapa saja yang ikut" subtitle={draft.title} back="/new" />
 
       {/* Host */}
       <section className="mb-5">
@@ -200,96 +167,52 @@ export default function AssignPage() {
             <Plus size={17} />
           </button>
         </div>
-        {participants.length > 0 && (
+        {participants.length > 0 ? (
           <div className="mt-2.5 flex flex-wrap gap-2">
             {participants.map((p) => (
               <span key={p} className="pill pill-on cursor-default">
                 {p}
-                <button onClick={() => removeParticipant(p)} aria-label={`Hapus ${p}`}>
+                <button
+                  onClick={() => setParticipants((ps) => ps.filter((x) => x !== p))}
+                  aria-label={`Hapus ${p}`}
+                >
                   <Close size={13} />
                 </button>
               </span>
             ))}
           </div>
-        )}
-      </section>
-
-      {/* Items */}
-      <section>
-        <div className="mb-2 flex items-center justify-between">
-          <h2 className="label">Siapa makan apa</h2>
-          {participants.length > 1 && (
-            <div className="flex gap-3 text-[11px]">
-              <button onClick={() => assignAll("all")} className="text-blue-400">
-                Bagi rata
-              </button>
-              <button onClick={() => assignAll("clear")} className="text-zinc-500">
-                Kosongkan
-              </button>
-            </div>
-          )}
-        </div>
-
-        <div className="card divide-y divide-[var(--line)] overflow-hidden">
-          {draft.items.map((it: any) => {
-            const picked = participants.filter((p) => (assignments[p] || []).includes(it.id));
-            return (
-              <div key={it.id} className="px-4 py-3">
-                <div className="flex items-baseline justify-between gap-3">
-                  <p className="min-w-0 flex-1 truncate text-sm text-zinc-100">
-                    {it.name} <span className="text-zinc-500">· {it.qty}×</span>
-                  </p>
-                  <p className="num shrink-0 text-sm text-zinc-300">{fmtRp(it.price * it.qty)}</p>
-                </div>
-                {participants.length === 0 ? (
-                  <p className="mt-1.5 text-[11px] text-zinc-600">tambah peserta dulu</p>
-                ) : (
-                  <div className="mt-2 flex flex-wrap gap-1.5">
-                    {participants.map((p) => {
-                      const on = (assignments[p] || []).includes(it.id);
-                      return (
-                        <button
-                          key={p}
-                          onClick={() => toggle(p, it.id)}
-                          className={`pill !h-7 !text-[12px] ${on ? "pill-on" : ""}`}
-                        >
-                          {p}
-                        </button>
-                      );
-                    })}
-                    {picked.length > 1 && (
-                      <span className="tag tag-accent self-center">
-                        dibagi {picked.length}
-                      </span>
-                    )}
-                  </div>
-                )}
-              </div>
-            );
-          })}
-        </div>
-
-        {unassigned.length > 0 && participants.length > 0 && (
-          <p className="mt-2.5 text-[11px] text-amber-400/90">
-            {unassigned.length} item belum ada yang tanggung:{" "}
-            {unassigned.map((u: any) => u.name).join(", ")}
+        ) : (
+          <p className="mt-2.5 text-[11px] leading-relaxed text-zinc-500">
+            Tambahkan nama temanmu. Nanti mereka yang centang sendiri item yang mereka makan lewat
+            link masing-masing, kamu tidak perlu bagi-bagi manual.
           </p>
         )}
-        {error && <p className="mt-2.5 text-[13px] text-red-400">{error}</p>}
       </section>
+
+      {/* What they'll see */}
+      <section className="card p-4">
+        <h2 className="label mb-2">Yang mereka lakukan</h2>
+        <ol className="space-y-1.5 text-[12px] leading-relaxed text-zinc-400">
+          <li>1. Buka link pribadinya (tanpa login).</li>
+          <li>2. Centang item yang dia makan, item bareng otomatis dibagi.</li>
+          <li>3. Lihat totalnya, transfer ke {hostMode === "me" ? "kamu" : hostName || "host"}.</li>
+        </ol>
+        <p className="mt-3 border-t border-[var(--line)] pt-3 text-[11px] text-zinc-500">
+          Item yang tidak dicentang siapa pun tetap dihitung sebagai bagianmu.
+        </p>
+      </section>
+
+      {error && <p className="mt-3 text-[13px] text-red-400">{error}</p>}
 
       <div className="bottom-bar">
         <div className="bottom-bar-inner">
           <div className="mb-2 flex items-center justify-between text-[12px]">
-            <span className="text-zinc-500">
-              {participants.length} peserta
-              {unassigned.length > 0 ? ` · ${unassigned.length} item belum` : ""}
-            </span>
+            <span className="text-zinc-500">{participants.length} peserta</span>
             <span className="num text-zinc-300">{fmtRp(draft.total)}</span>
           </div>
           <button onClick={save} disabled={!canSave} className="btn btn-primary btn-block">
             {saving ? <Spinner size={16} /> : null}
-            {saving ? "Menyimpan…" : "Simpan & buat link"}
+            {saving ? "Menyimpan…" : "Buat bill & link"}
           </button>
         </div>
       </div>

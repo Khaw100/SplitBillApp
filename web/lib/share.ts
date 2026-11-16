@@ -31,20 +31,19 @@ export function payMessage({
 }: {
   title: string;
   participant: string;
-  total: number;
+  total?: number;
   host?: Host | null;
   url: string;
 }) {
-  return [
-    `Halo ${participant}! Ini split bill ${title}.`,
-    "",
-    `Bagian kamu: ${fmtRp(total)}`,
-    ...hostBlock(host),
-    "",
-    `Rincian: ${url}`,
-    "",
-    "Makasih ya!",
-  ].join("\n");
+  type Row = string;
+  const rows: Row[] = [`Halo ${participant}! Ini split bill ${title}.`, ""];
+  if (typeof total === "number" && total > 0) {
+    rows.push(`Bagian kamu: ${fmtRp(total)}`);
+  } else {
+    rows.push("Centang item yang kamu makan di link bawah ya, nanti totalnya muncul sendiri.");
+  }
+  rows.push(...hostBlock(host), "", `Rincian: ${url}`, "", "Makasih ya!");
+  return rows.join("\n");
 }
 
 export function generalMessage({

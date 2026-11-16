@@ -1,7 +1,6 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
 import { api, fmtDate, fmtRp } from "@/lib/api";
 import { copyText, generalMessage, payMessage, waLink } from "@/lib/share";
@@ -21,8 +20,11 @@ export default function BillReport() {
   const { id } = useParams<{ id: string }>();
   const router = useRouter();
   const [bill, setBill] = useState<any>(null);
-  const [result, setResult] = useState<any[] | null>(null);
-  const [status, setStatus] = useState<Record<string, any>>({});
+  const [result, setResult] = useState<any[]>([]);
+  const [status, setStatus] = useState<
+    Record<string, { chosen: boolean; total: number; paid: any }>
+  >({});
+  const [unclaimed, setUnclaimed] = useState(0);
   const [links, setLinks] = useState<Record<string, string>>({});
   const [copied, setCopied] = useState<string | null>(null);
   const [shareUrl, setShareUrl] = useState<string | null>(null);
@@ -34,13 +36,17 @@ export default function BillReport() {
     api(`/bills/${id}`).then(async (b) => {
       setBill(b);
       api(`/bills/${id}/result`)
-        .then((r) => setResult(r.result))
+        .then((r) => {
+          setResult(r.result || []);
+          setUnclaimed(r.unclaimed || 0);
+        })
         .catch(() => {});
       api(`/bills/${id}/status`)
         .then((s: any) => {
           const map: Record<string, any> = {};
-          for (const p of s.participants || []) map[p.name] = p.paid;
+          for (const p of s.participants || []) map[p.name] = p;
           setStatus(map);
+          setUnclaimed(s.unclaimed || 0);
         })
         .catch(() => {});
       // pay links are idempotent server-side
@@ -69,9 +75,11 @@ export default function BillReport() {
 
   const host = bill.host;
   const grand = bill.total;
-  const people = result || [];
-  const paidTotal = Object.values(status).reduce((s: number, p: any) => s + (p?.total || 0), 0);
-  const perPerson = people.length ? grand / people.length : 0;
+  const participants: string[] = bill.participants || [];
+  const rows = result;
+  const rowByName = Object.fromEntries(rows.map((p) => [p.name, p]));
+  const paidTotal = Object.values(status).reduce((s, p) => s + (p?.paid?.total || 0), 0);
+  const chosenCount = Object.values(status).filter((p) => p?.chosen).length;
   const date = fmtDate(bill.created_at);
 
   const flash = (tag: string) => {
@@ -80,16 +88,10 @@ export default function BillReport() {
   };
 
   const copyPay = async (name: string) => {
-    const row = people.find((p) => p.name === name);
     const url = links[name] || `${location.origin}/`;
+    const row = rowByName[name];
     await copyText(
-      payMessage({
-        title: bill.title,
-        participant: name,
-        total: row?.total ?? 0,
-        host,
-        url,
-      })
+      payMessage({ title: bill.title, participant: name, total: row?.total, host, url })
     );
     flash(`pay-${name}`);
   };
@@ -107,7 +109,7 @@ export default function BillReport() {
         generalMessage({
           title: bill.title,
           total: grand,
-          people: people.map((p) => ({ name: p.name, total: p.total })),
+          people: rows.map((p) => ({ name: p.name, total: p.total })),
           host,
           url,
         })
@@ -119,11 +121,10 @@ export default function BillReport() {
   };
 
   const downloadCsv = () => {
-    const rows = ["peserta,item,qty,harga_satuan,subtotal"];
-    for (const p of people)
-      for (const l of p.lines)
-        rows.push(`"${p.name}","${l.name}",${l.qty},${l.price},${l.line_total}`);
-    const blob = new Blob([rows.join("\n")], { type: "text/csv" });
+    const out = ["peserta,item,qty,harga,subtotal"];
+    for (const p of rows)
+      for (const l of p.lines) out.push(`"${p.name}","${l.name}",${l.qty},${l.price},${l.line_total}`);
+    const blob = new Blob([out.join("\n")], { type: "text/csv" });
     const a = document.createElement("a");
     a.href = URL.createObjectURL(blob);
     a.download = `${bill.title.replace(/\W+/g, "_")}_split.csv`;
@@ -135,11 +136,13 @@ export default function BillReport() {
     router.replace("/");
   };
 
+  const openLink = (name: string) => links[name] || "#";
+
   return (
     <main className="page page-bar">
       <AppHeader
         title={bill.title}
-        subtitle={`${date} · ${bill.participants.length} orang`}
+        subtitle={`${date} · ${participants.length} orang`}
         back="/"
         right={
           <button onClick={copyGeneral} className="icon-btn" aria-label="Bagikan hasil" disabled={busyShare}>
@@ -207,17 +210,17 @@ export default function BillReport() {
         )}
         {host?.is_owner && host.accounts?.length === 0 && !host.phone && (
           <p className="mt-3 border-t border-[var(--line)] pt-3 text-[11px] leading-relaxed text-amber-400/90">
-            Rekening belum diisi di Wipiii Hub.{" "}
+            Rekening belum diisi. Isi <code className="text-amber-300/80">owner_accounts</code> di
+            App Config Hub{" "}
             <a
               href="https://dashboard.rakhawiratama.com/projects/2"
               target="_blank"
               rel="noreferrer"
               className="link"
             >
-              Buka App Config
-            </a>{" "}
-            (key <code className="text-amber-300/80">owner_accounts</code>) biar temanmu tahu harus
-            transfer ke mana.
+              di sini
+            </a>
+            .
           </p>
         )}
       </section>
@@ -229,13 +232,6 @@ export default function BillReport() {
           <p className="num mt-1 text-[15px] font-semibold">{fmtRp(grand)}</p>
         </div>
         <div className="card px-3 py-2.5">
-          <p className="label">Peserta</p>
-          <p className="num mt-1 text-[15px] font-semibold">
-            {people.length}
-            <span className="ml-1 text-[11px] font-normal text-zinc-500">orang</span>
-          </p>
-        </div>
-        <div className="card px-3 py-2.5">
           <p className="label">Masuk</p>
           <p
             className={`num mt-1 text-[15px] font-semibold ${
@@ -245,101 +241,129 @@ export default function BillReport() {
             {fmtRp(paidTotal)}
           </p>
         </div>
+        <div className="card px-3 py-2.5">
+          <p className="label">Bagianmu</p>
+          <p className="num mt-1 text-[15px] font-semibold text-zinc-300">{fmtRp(unclaimed)}</p>
+        </div>
       </section>
 
       {/* Participants */}
       <div className="mb-2 flex items-baseline justify-between">
         <h2 className="label">Pembagian</h2>
-        <span className="text-[11px] text-zinc-600">{people.length} orang</span>
+        <span className="text-[11px] text-zinc-500">
+          {chosenCount}/{participants.length} sudah pilih
+        </span>
       </div>
 
       <ul className="space-y-2">
-        {people.length === 0 && (
-          <li className="card px-6 py-8 text-center text-[13px] text-zinc-500">
-            Belum ada peserta di bill ini.
-          </li>
-        )}
-        {people.map((p) => {
-          const paid = status[p.name];
+        {participants.map((name) => {
+          const st = status[name];
+          const row = rowByName[name];
+          const chosen = st?.chosen ?? !!row;
+          const paid = st?.paid;
           return (
-            <li key={p.name} className="card overflow-hidden">
+            <li key={name} className="card overflow-hidden">
               <div className="flex items-center gap-3 px-4 py-3">
-                <Avatar name={p.name} />
+                <Avatar name={name} />
                 <div className="min-w-0 flex-1">
                   <p className="flex items-center gap-2 text-sm font-medium text-zinc-100">
-                    <span className="truncate">{p.name}</span>
+                    <span className="truncate">{name}</span>
                     {paid ? (
                       <span className="tag tag-ok">lunas</span>
+                    ) : chosen ? (
+                      <span className="tag tag-accent">sudah pilih</span>
                     ) : (
-                      <span className="tag" style={{ color: "#a1a1aa" }}>belum</span>
+                      <span className="tag">belum pilih</span>
                     )}
                   </p>
                   <p className="mt-0.5 text-[11px] text-zinc-500">
-                    {p.lines.length} item{p.others > 0 ? ` · termasuk pajak ${fmtRp(p.others)}` : ""}
+                    {row
+                      ? `${row.lines.length} jenis item${row.others > 0 ? ` · termasuk pajak ${fmtRp(row.others)}` : ""}`
+                      : "menunggu dia centang itemnya"}
                   </p>
                 </div>
-                <p className="num shrink-0 text-[15px] font-semibold text-zinc-100">
-                  {fmtRp(p.total)}
+                <p
+                  className={`num shrink-0 text-[15px] font-semibold ${
+                    row ? "text-zinc-100" : "text-zinc-600"
+                  }`}
+                >
+                  {row ? fmtRp(row.total) : "—"}
                 </p>
               </div>
 
               <div className="flex items-center gap-2 border-t border-[var(--line)] px-3 py-2">
-                <button onClick={() => copyPay(p.name)} className="btn btn-secondary btn-sm flex-1">
-                  {copied === `pay-${p.name}` ? (
+                <button
+                  onClick={() => copyPay(name)}
+                  className="btn btn-secondary btn-sm flex-1"
+                >
+                  {copied === `pay-${name}` ? (
                     <>
                       <Check size={14} /> Pesan disalin
                     </>
                   ) : (
                     <>
-                      <Copy size={14} /> Salin pesan
+                      <Copy size={14} /> Kirim tagihan
                     </>
                   )}
                 </button>
-                {links[p.name] && (
-                  <a
-                    href={waLink(
-                      payMessage({
-                        title: bill.title,
-                        participant: p.name,
-                        total: p.total,
-                        host,
-                        url: links[p.name],
-                      })
-                    )}
-                    target="_blank"
-                    rel="noreferrer"
-                    className="btn btn-ghost btn-sm !px-2.5"
-                    aria-label="Kirim WhatsApp"
-                  >
-                    <WhatsApp size={15} />
-                  </a>
+                {links[name] && (
+                  <>
+                    <a
+                      href={waLink(payMessage({ title: bill.title, participant: name, host, url: links[name] }))}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="btn btn-ghost btn-sm !px-2.5"
+                      aria-label="Kirim WhatsApp"
+                    >
+                      <WhatsApp size={15} />
+                    </a>
+                    <a
+                      href={openLink(name)}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="btn btn-ghost btn-sm !px-2.5 text-[11px]"
+                    >
+                      Buka
+                    </a>
+                  </>
                 )}
               </div>
 
-              <details className="border-t border-[var(--line)]">
-                <summary className="cursor-pointer px-4 py-2 text-[11px] text-zinc-500 hover:text-zinc-300">
-                  Lihat rincian item
-                </summary>
-                <div className="px-4 pb-3">
-                  {p.lines.map((l: any, i: number) => (
-                    <div key={i} className="flex items-baseline justify-between gap-3 py-1">
-                      <p className="min-w-0 flex-1 truncate text-[13px] text-zinc-400">
-                        {l.name}
-                        {l.shared_by > 1 && <span className="ml-1.5 text-[10px] text-zinc-600">÷{l.shared_by}</span>}
-                      </p>
-                      <p className="num text-[12px] text-zinc-500">{fmtRp(l.line_total)}</p>
+              {row && (
+                <details className="border-t border-[var(--line)]">
+                  <summary className="cursor-pointer px-4 py-2 text-[11px] text-zinc-500 hover:text-zinc-300">
+                    Lihat rincian item
+                  </summary>
+                  <div className="px-4 pb-3">
+                    {row.lines.map((l: any, i: number) => (
+                      <div key={i} className="flex items-baseline justify-between gap-3 py-1">
+                        <p className="min-w-0 flex-1 truncate text-[13px] text-zinc-400">
+                          {l.name}
+                          {l.units > l.qty && (
+                            <span className="ml-1.5 text-[10px] text-zinc-600">
+                              ({l.qty}/{l.units})
+                            </span>
+                          )}
+                        </p>
+                        <p className="num text-[12px] text-zinc-500">{fmtRp(l.line_total)}</p>
+                      </div>
+                    ))}
+                    <div className="mt-2 flex items-baseline justify-between border-t border-[var(--line)] pt-2">
+                      <p className="text-[12px] text-zinc-500">Item {fmtRp(row.subtotal)}</p>
+                      <p className="text-[12px] text-zinc-500">Pajak/lainnya {fmtRp(row.others)}</p>
                     </div>
-                  ))}
-                  <div className="mt-2 flex items-baseline justify-between border-t border-[var(--line)] pt-2">
-                    <p className="text-[12px] text-zinc-500">Item {fmtRp(p.subtotal)}</p>
-                    <p className="text-[12px] text-zinc-500">Pajak/lainnya {fmtRp(p.others)}</p>
                   </div>
-                </div>
-              </details>
+                </details>
+              )}
             </li>
           );
         })}
       </ul>
+
+      <p className="mt-3 text-[11px] leading-relaxed text-zinc-500">
+        Bagianmu {fmtRp(unclaimed)} mencakup item yang tidak dicentang siapa pun dan item yang kamu
+        makan sendiri.
+      </p>
 
       {/* Actions */}
       <section className="mt-6 space-y-2">
@@ -355,10 +379,6 @@ export default function BillReport() {
           </button>
         </div>
       </section>
-
-      <p className="mt-6 text-center text-[11px] leading-relaxed text-zinc-500">
-        Link pembayaran tiap orang bisa dibuka tanpa login, jadi aman dikirim lewat WhatsApp.
-      </p>
 
       <div className="bottom-bar">
         <div className="bottom-bar-inner">

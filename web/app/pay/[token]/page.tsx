@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useParams } from "next/navigation";
 import { fmtRp } from "@/lib/api";
 import { copyText } from "@/lib/share";
@@ -11,10 +11,13 @@ export default function PayPage() {
   const [data, setData] = useState<any | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [qty, setQty] = useState<Record<string, number>>({});
-  const [checked, setChecked] = useState<Record<string, boolean>>({});
   const [copied, setCopied] = useState<string | null>(null);
+  const [saved, setSaved] = useState(false);
+  const [saving, setSaving] = useState(false);
   const [confirming, setConfirming] = useState(false);
   const [done, setDone] = useState(false);
+  const [doneTotal, setDoneTotal] = useState(0);
+  const saveTimer = useRef<any>(null);
 
   useEffect(() => {
     if (!token) return;
@@ -26,16 +29,42 @@ export default function PayPage() {
       .then((d) => {
         setData(d);
         const q: Record<string, number> = {};
-        const c: Record<string, boolean> = {};
-        for (const it of d.items) {
-          q[it.id] = it.qty || 1;
-          c[it.id] = true;
-        }
+        for (const it of d.items) q[it.id] = it.my_qty || 0;
         setQty(q);
-        setChecked(c);
       })
       .catch((e) => setError(e.message));
   }, [token]);
+
+  const picked = useCallback(
+    (): { id: string; qty: number }[] =>
+      Object.entries(qty)
+        .filter(([, q]) => q > 0)
+        .map(([id, q]) => ({ id, qty: q })),
+    [qty]
+  );
+
+  // Persist the checklist shortly after they stop tapping, so the host sees
+  // progress live without the friend having to press "save".
+  useEffect(() => {
+    if (!data || done || data.paid) return;
+    if (saveTimer.current) clearTimeout(saveTimer.current);
+    saveTimer.current = setTimeout(async () => {
+      try {
+        setSaving(true);
+        const res = await fetch(`/api/pay/${token}/claim`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ items: picked() }),
+        });
+        if (res.ok) setSaved(true);
+      } catch {
+        /* offline: the confirm button retries */
+      } finally {
+        setSaving(false);
+      }
+    }, 700);
+    return () => saveTimer.current && clearTimeout(saveTimer.current);
+  }, [qty, data, token, done, picked]);
 
   if (error)
     return (
@@ -53,6 +82,7 @@ export default function PayPage() {
     );
 
   const host = data.host;
+  const ratio = data.fee_ratio ?? 1;
 
   if (done || data.paid)
     return (
@@ -64,7 +94,7 @@ export default function PayPage() {
         <p className="mt-1 text-sm text-zinc-400">
           {data.participant} ·{" "}
           <span className="num font-semibold text-emerald-400">
-            {fmtRp(data.paid?.total ?? 0)}
+            {fmtRp(done ? doneTotal : data.paid?.total ?? 0)}
           </span>
         </p>
         <p className="mt-3 max-w-[20rem] text-[11px] leading-relaxed text-zinc-600">
@@ -75,11 +105,10 @@ export default function PayPage() {
       </main>
     );
 
-  const ratio = data.fee_ratio ?? 1;
   const myTotal = data.items.reduce((sum: number, it: any) => {
-    if (!checked[it.id]) return sum;
-    const q = qty[it.id] || 1;
-    return sum + ((it.price * q) / Math.max(1, it.shared_by)) * ratio;
+    const q = qty[it.id] || 0;
+    if (q <= 0) return sum;
+    return sum + it.price * q * (it.unit_scale ?? 1) * ratio;
   }, 0);
 
   const flash = (tag: string) => {
@@ -95,20 +124,22 @@ export default function PayPage() {
   const confirm = async () => {
     setConfirming(true);
     try {
-      const items = data.items
-        .filter((it: any) => checked[it.id])
-        .map((it: any) => ({ id: it.id, qty: qty[it.id] || 1 }));
       const res = await fetch(`/api/pay/${token}/confirm`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ items }),
+        body: JSON.stringify({ items: picked() }),
       });
       if (!res.ok) throw new Error("Gagal konfirmasi");
+      const d = await res.json();
+      setDoneTotal(d.total ?? Math.round(myTotal));
       setDone(true);
     } finally {
       setConfirming(false);
     }
   };
+
+  const totalItems = data.items.length;
+  const pickedCount = picked().length;
 
   return (
     <main className="page page-bar">
@@ -122,10 +153,17 @@ export default function PayPage() {
 
       {/* Hero */}
       <section className="card mb-3 p-5">
-        <p className="label">Bagian {data.participant}</p>
+        <div className="flex items-start justify-between">
+          <p className="label">Bagian {data.participant}</p>
+          {(saving || saved) && (
+            <span className="tag">{saving ? "menyimpan…" : "tersimpan"}</span>
+          )}
+        </div>
         <p className="money-xl mt-2">{fmtRp(myTotal)}</p>
         <p className="mt-2 text-[11px] text-zinc-500">
-          {data.items.length} jenis item · total bill {fmtRp(data.total)}
+          {pickedCount === 0
+            ? `centang item yang kamu makan di bawah (${totalItems} item)`
+            : `${pickedCount} dari ${totalItems} item · total bill ${fmtRp(data.total)}`}
         </p>
       </section>
 
@@ -179,7 +217,10 @@ export default function PayPage() {
               <div className="flex items-center justify-between gap-3 px-4 py-2.5">
                 <div className="min-w-0">
                   <p className="text-[11px] uppercase tracking-wider text-zinc-500">Nomor HP / WA</p>
-                  <a href={`tel:${host.phone}`} className="num mt-0.5 block truncate text-sm text-zinc-100">
+                  <a
+                    href={`tel:${host.phone}`}
+                    className="num mt-0.5 block truncate text-sm text-zinc-100"
+                  >
                     {host.phone}
                   </a>
                 </div>
@@ -202,20 +243,35 @@ export default function PayPage() {
         )}
       </section>
 
-      {/* Items */}
-      <h2 className="label mb-2">Yang kamu tanggung</h2>
+      {/* Checklist */}
+      <div className="mb-2 flex items-baseline justify-between">
+        <h2 className="label">Centang yang kamu makan</h2>
+        <button
+          onClick={() => {
+            const next: Record<string, number> = {};
+            for (const it of data.items) next[it.id] = 0;
+            setQty(next);
+          }}
+          className="text-[11px] text-zinc-500 hover:text-zinc-300"
+        >
+          kosongkan
+        </button>
+      </div>
+
       <div className="card mb-2 divide-y divide-[var(--line)] overflow-hidden">
         {data.items.map((it: any) => {
-          const on = !!checked[it.id];
-          const q = qty[it.id] || 1;
-          const line = ((it.price * q) / Math.max(1, it.shared_by)) * ratio;
+          const q = qty[it.id] || 0;
+          const on = q > 0;
+          const line = it.price * q * (it.unit_scale ?? 1) * ratio;
           return (
             <div key={it.id} className="px-4 py-3">
               <div className="flex items-start gap-3">
                 <input
                   type="checkbox"
                   checked={on}
-                  onChange={() => setChecked((c) => ({ ...c, [it.id]: !c[it.id] }))}
+                  onChange={() =>
+                    setQty((prev) => ({ ...prev, [it.id]: prev[it.id] > 0 ? 0 : 1 }))
+                  }
                   className="check mt-0.5"
                   aria-label={`Tandai ${it.name}`}
                 />
@@ -223,44 +279,51 @@ export default function PayPage() {
                   <div className="flex items-baseline justify-between gap-2">
                     <p
                       className={`truncate text-sm ${
-                        on ? "text-zinc-100" : "text-zinc-500 line-through"
+                        on ? "text-zinc-100" : "text-zinc-500"
                       }`}
                     >
                       {it.name}
                     </p>
-                    <p className="num shrink-0 text-[13px] text-zinc-300">{fmtRp(line)}</p>
+                    <p className="num shrink-0 text-[13px] text-zinc-300">
+                      {on ? fmtRp(line) : <span className="text-zinc-600">—</span>}
+                    </p>
                   </div>
                   <div className="mt-1.5 flex items-center justify-between gap-2">
                     <p className="truncate text-[11px] text-zinc-500">
-                      {fmtRp(it.price * ratio)} × {q}
-                      {it.shared_by > 1 ? ` ÷ ${it.shared_by} orang` : ""}
+                      {fmtRp(it.price * ratio)}/item
+                      {it.qty > 1 && q > 0 ? ` · kamu ambil ${q} dari ${it.qty}` : ""}
+                      {it.claimed_by_others > 0
+                        ? ` · ${it.claimed_by_others} orang lain`
+                        : ""}
                     </p>
-                    <div className="flex shrink-0 items-center gap-1">
-                      <button
-                        onClick={() =>
-                          setQty((prev) => ({ ...prev, [it.id]: Math.max(1, (prev[it.id] || 1) - 1) }))
-                        }
-                        disabled={q <= 1}
-                        className="h-6 w-6 rounded-md border border-[var(--line)] text-[13px] leading-none text-zinc-400 disabled:opacity-35"
-                        aria-label="Kurangi"
-                      >
-                        −
-                      </button>
-                      <span className="num w-5 text-center text-[12px] text-zinc-300">{q}</span>
-                      <button
-                        onClick={() =>
-                          setQty((prev) => ({
-                            ...prev,
-                            [it.id]: Math.min(it.qty || 99, (prev[it.id] || 1) + 1),
-                          }))
-                        }
-                        disabled={q >= (it.qty || 99)}
-                        className="h-6 w-6 rounded-md border border-[var(--line)] text-[13px] leading-none text-zinc-400 disabled:opacity-35"
-                        aria-label="Tambah"
-                      >
-                        +
-                      </button>
-                    </div>
+                    {on && it.qty > 1 && (
+                      <div className="flex shrink-0 items-center gap-1">
+                        <button
+                          onClick={() =>
+                            setQty((prev) => ({ ...prev, [it.id]: Math.max(1, prev[it.id] - 1) }))
+                          }
+                          disabled={q <= 1}
+                          className="h-6 w-6 rounded-md border border-[var(--line)] text-[13px] leading-none text-zinc-400 disabled:opacity-35"
+                          aria-label="Kurangi"
+                        >
+                          −
+                        </button>
+                        <span className="num w-5 text-center text-[12px] text-zinc-300">{q}</span>
+                        <button
+                          onClick={() =>
+                            setQty((prev) => ({
+                              ...prev,
+                              [it.id]: Math.min(it.qty, prev[it.id] + 1),
+                            }))
+                          }
+                          disabled={q >= it.qty}
+                          className="h-6 w-6 rounded-md border border-[var(--line)] text-[13px] leading-none text-zinc-400 disabled:opacity-35"
+                          aria-label="Tambah"
+                        >
+                          +
+                        </button>
+                      </div>
+                    )}
                   </div>
                 </div>
               </div>
@@ -269,8 +332,9 @@ export default function PayPage() {
         })}
       </div>
       <p className="text-[11px] leading-relaxed text-zinc-500">
-        Item yang tidak kamu makan bisa di-uncheck, atau kurangi quantity-nya. Total di bawah ikut
-        menyesuaikan. Harga per item sudah termasuk bagian pajak/service proporsional.
+        Centang item yang kamu makan, item bareng otomatis dihitung proporsional. Pilihanmu
+        tersimpan sendiri, jadi bisa diubah kapan saja sebelum bayar. Harga sudah termasuk bagian
+        pajak/service.
       </p>
 
       <div className="bottom-bar">
