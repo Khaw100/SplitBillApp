@@ -574,6 +574,26 @@ async def bill_result(bill_id: str, user: str = Depends(require_user)):
     }
 
 
+@app.patch("/bills/{bill_id}")
+async def update_bill(bill_id: str, request: Request, user: str = Depends(require_user)):
+    """Rename a bill (OCR titles are often useless). Keeps every share snapshot in sync."""
+    body = await request.json()
+    title = (body.get("title") or "").strip()
+    if not title:
+        raise HTTPException(status_code=422, detail="Title can't be empty")
+    title = title[:120]
+    with get_db() as db:
+        cur = db.execute("UPDATE bills SET title=? WHERE id=?", (title, bill_id))
+        if cur.rowcount == 0:
+            raise HTTPException(status_code=404, detail="Bill not found")
+        rows = db.execute("SELECT id,snapshot_json FROM shares WHERE bill_id=?", (bill_id,)).fetchall()
+        for r in rows:
+            snap = json.loads(r["snapshot_json"])
+            snap["title"] = title
+            db.execute("UPDATE shares SET snapshot_json=? WHERE id=?", (json.dumps(snap), r["id"]))
+    return {"ok": True, "title": title}
+
+
 @app.delete("/bills/{bill_id}")
 async def delete_bill(bill_id: str, user: str = Depends(require_user)):
     with get_db() as db:

@@ -5,7 +5,7 @@ import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
 import { api, downloadCsv, fmtDate, fmtRp } from "@/lib/api";
 import { copyText, generalMessage, payMessage, waLink } from "@/lib/share";
-import { AppHeader, Avatar, Check, Copy, Download, Share, Spinner, Trash, WhatsApp } from "@/lib/ui";
+import { AppHeader, Avatar, Check, Copy, Download, Pencil, Share, Spinner, Trash, WhatsApp } from "@/lib/ui";
 
 const HUB_CONFIG_URL = "https://dashboard.rakhawiratama.com/projects/2";
 
@@ -26,6 +26,9 @@ export default function BillReport() {
   const [busyShare, setBusyShare] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [reviewing, setReviewing] = useState<string | null>(null);
+  const [editingTitle, setEditingTitle] = useState(false);
+  const [titleDraft, setTitleDraft] = useState("");
+  const [savingTitle, setSavingTitle] = useState(false);
 
   const loadStatus = async () => {
     const s: any = await api(`/bills/${id}/status`);
@@ -176,6 +179,30 @@ export default function BillReport() {
     }
   };
 
+  const startRename = () => {
+    setTitleDraft(bill.title);
+    setEditingTitle(true);
+  };
+
+  const saveTitle = async () => {
+    const next = titleDraft.trim();
+    if (!next || next === bill.title) {
+      setEditingTitle(false);
+      return;
+    }
+    setSavingTitle(true);
+    setError(null);
+    try {
+      await api(`/bills/${id}`, { method: "PATCH", body: JSON.stringify({ title: next }) });
+      setBill({ ...bill, title: next });
+      setEditingTitle(false);
+    } catch (e: any) {
+      setError(e.message || "Couldn't rename the bill");
+    } finally {
+      setSavingTitle(false);
+    }
+  };
+
   const hostCard = (
     <section className="card p-4">
       <div className="flex items-center gap-3">
@@ -278,17 +305,59 @@ export default function BillReport() {
         title={bill.title}
         subtitle={`${fmtDate(bill.created_at)} · ${participants.length} ${participants.length === 1 ? "person" : "people"}`}
         back="/"
+        wrap
         right={
-          <button
-            onClick={copyGeneral}
-            className="icon-btn lg:hidden"
-            aria-label="Share summary"
-            disabled={busyShare}
-          >
-            {copied === "general" ? <Check size={17} /> : <Share size={17} />}
-          </button>
+          <div className="flex items-center gap-2">
+            <button onClick={startRename} className="icon-btn" aria-label="Rename bill">
+              <Pencil size={16} />
+            </button>
+            <button
+              onClick={copyGeneral}
+              className="icon-btn lg:hidden"
+              aria-label="Share summary"
+              disabled={busyShare}
+            >
+              {copied === "general" ? <Check size={17} /> : <Share size={17} />}
+            </button>
+          </div>
         }
       />
+
+      {editingTitle && (
+        <div className="card mb-3 p-3">
+          <input
+            autoFocus
+            value={titleDraft}
+            maxLength={120}
+            onFocus={(e) => {
+              const el = e.currentTarget;
+              el.select();
+              requestAnimationFrame(() => {
+                el.scrollLeft = 0;
+              });
+            }}
+            onChange={(e) => setTitleDraft(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") saveTitle();
+              if (e.key === "Escape") setEditingTitle(false);
+            }}
+            placeholder="Bill name"
+            className="input !h-10 w-full text-sm"
+          />
+          <div className="mt-2 flex gap-2">
+            <button onClick={saveTitle} disabled={savingTitle} className="btn btn-primary btn-sm flex-1">
+              {savingTitle ? "Saving…" : "Save name"}
+            </button>
+            <button
+              onClick={() => setEditingTitle(false)}
+              className="btn btn-ghost btn-sm"
+              aria-label="Cancel rename"
+            >
+              Cancel
+            </button>
+          </div>
+        </div>
+      )}
 
       <div className="lg:grid lg:grid-cols-[22rem_1fr] lg:items-start lg:gap-8">
         {/* Sidebar on desktop; stacked on top on mobile */}
